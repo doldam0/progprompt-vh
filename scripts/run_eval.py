@@ -15,6 +15,7 @@ for the VirtualHome environment tasks
 """
 
 import sys
+from typing import Dict, List, TypedDict
 
 sys.path.append("virtualhome/simulation")
 sys.path.append("virtualhome/demo")
@@ -25,14 +26,38 @@ import os
 import os.path as osp
 import random
 
+from virtualhome.demo.utils_demo import *  # type: ignore
 from virtualhome.simulation.unity_simulator.comm_unity import UnityCommunication
-from virtualhome.demo.utils_demo import *
 
 import openai
 import json
 import time
 
 from utils_execute import *
+
+
+class RunEvalArguments(argparse.Namespace):
+    progprompt_path: str
+    expt_name: str
+    openai_api_key: str
+    unity_filename: str
+    port: str
+    display: str
+    gpt_version: str
+    env_id: int
+    test_set: str
+    prompt_task_examples: str
+    seed: int
+    prompt_num_examples: int
+    prompt_task_examples_ablation: str
+    load_generated_plans: bool
+
+
+class EvaluationResult(TypedDict):
+    PSR: float
+    SR: float
+    Precision: float
+    Exec: float
 
 
 def eval(
@@ -42,7 +67,7 @@ def eval(
     test_tasks,
     exec_per_task,
     log_file,
-):
+) -> Dict[str, EvaluationResult]:
 
     ## the evaluation criteria is not perfect
     ## since sometimes the tasks are underspecified, like which object to interact with
@@ -50,12 +75,12 @@ def eval(
     ## the evaluation happens w.r.t one possible valid state
     ## that the annotator provides
 
-    sr = []
-    unsatif_conds = []
-    unchanged_conds = []
-    total_goal_conds = []
-    total_unchanged_conds = []
-    results = {}
+    sr: List[float] = []
+    unsatif_conds: List[int] = []
+    unchanged_conds: List[int] = []
+    total_goal_conds: List[int] = []
+    total_unchanged_conds: List[int] = []
+    results: Dict[str, EvaluationResult] = {}
     for g, g_gt, g_in, d in zip(
         final_states, final_states_GT, initial_states, test_tasks
     ):
@@ -167,7 +192,7 @@ def eval(
     return results
 
 
-def planner_executer(args):
+def planner_executer(args: RunEvalArguments):
 
     # initialize env
     comm = UnityCommunication(
@@ -245,6 +270,16 @@ def planner_executer(args):
         ]
         prompt = "\n".join(prompt)
 
+    # setup logging
+    log_filename = f"{args.expt_name}_{args.prompt_task_examples}_{args.prompt_num_examples}examples"
+    if args.prompt_task_examples_ablation != "none":
+        log_filename += f"_{args.prompt_task_examples_ablation}"
+    log_filename += f"_{args.test_set}"
+    log_file = open(
+        f"{args.progprompt_path}/results/{log_filename}_logs.txt", "w"
+    )
+    log_file.write(f"\n----PROMPT for planning----\n{prompt}\n")
+
     # evaluate in given unseen env
     if args.env_id != 0:
         comm.reset(args.env_id)
@@ -263,16 +298,6 @@ def planner_executer(args):
         log_file.write(
             f"\n----Test set tasks----\n{test_tasks}\nTotal: {len(test_tasks)} tasks\n"
         )
-
-    # setup logging
-    log_filename = f"{args.expt_name}_{args.prompt_task_examples}_{args.prompt_num_examples}examples"
-    if args.prompt_task_examples_ablation != "none":
-        log_filename += f"_{args.prompt_task_examples_ablation}"
-    log_filename += f"_{args.test_set}"
-    log_file = open(
-        f"{args.progprompt_path}/results/{log_filename}_logs.txt", "w"
-    )
-    log_file.write(f"\n----PROMPT for planning----\n{prompt}\n")
 
     # evaluate in seen env
     if args.env_id == 0:
@@ -367,7 +392,7 @@ def planner_executer(args):
     log_file.close()
 
 
-if __name__ == "__main__":
+def parse_args() -> RunEvalArguments:
     parser = argparse.ArgumentParser()
     parser.add_argument("--progprompt-path", type=str, required=True)
     parser.add_argument("--expt-name", type=str, required=True)
@@ -423,7 +448,12 @@ if __name__ == "__main__":
 
     parser.add_argument("--load-generated-plans", type=bool, default=False)
 
-    args = parser.parse_args()
+    args = parser.parse_args(namespace=RunEvalArguments())
+    return args
+
+
+if __name__ == "__main__":
+    args = parse_args()
     openai.api_key = args.openai_api_key
 
     if not osp.isdir(f"{args.progprompt_path}/results/"):
