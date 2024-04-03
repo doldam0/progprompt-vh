@@ -16,6 +16,8 @@ for the VirtualHome environment tasks
 
 import sys
 
+from utils.loads import load_annotations, load_environment_states, load_plan
+
 sys.path.append("virtualhome/simulation")
 sys.path.append("virtualhome/demo")
 sys.path.append("virtualhome")
@@ -28,11 +30,11 @@ import time
 from typing import Dict, List, TypedDict
 
 import openai
-from utils_execute import *
 from virtualhome.demo.utils_demo import *  # type: ignore
 from virtualhome.simulation.unity_simulator.comm_unity import UnityCommunication
 
-from scripts.arguments import RunEvalArguments, parse_args
+from utils.arguments import RunEvalArguments, parse_args
+from utils.utils_execute import *
 
 
 class EvaluationResult(TypedDict):
@@ -43,12 +45,12 @@ class EvaluationResult(TypedDict):
 
 
 def eval(
-    final_states,
-    final_states_GT,
-    initial_states,
-    test_tasks,
-    exec_per_task,
-    log_file,
+    final_states: List[EnvironmentState],
+    final_states_GT: List[EnvironmentState],
+    initial_states: List[EnvironmentState],
+    test_tasks: List[str],
+    exec_per_task: List[float],
+    log_file: TextIOWrapper,
 ) -> Dict[str, EvaluationResult]:
 
     ## the evaluation criteria is not perfect
@@ -192,14 +194,12 @@ def planner_executer(args: RunEvalArguments):
     prompt += f"\n\nobjects = {obj}"
 
     # load train split for task examples
-    with open(
-        f"{args.progprompt_path}/data/pythonic_plans/train_complete_plan_set.json",
-        "r",
-    ) as f:
-        tmp = json.load(f)
-        prompt_egs = {}
-        for k, v in tmp.items():
-            prompt_egs[k] = v
+    tmp = load_plan(
+        f"{args.progprompt_path}/data/pythonic_plans/train_complete_plan_set.json"
+    )
+    prompt_egs = {}
+    for k, v in tmp.items():
+        prompt_egs[k] = v
     # print("Loaded %d task example" % len(prompt_egs.keys()))
 
     ## define the prompt example task setting ##
@@ -262,6 +262,8 @@ def planner_executer(args: RunEvalArguments):
     )
     log_file.write(f"\n----PROMPT for planning----\n{prompt}\n")
 
+    test_tasks: List[str] = []
+
     # evaluate in given unseen env
     if args.env_id != 0:
         comm.reset(args.env_id)
@@ -270,27 +272,27 @@ def planner_executer(args: RunEvalArguments):
         prompt += f"\n\n\nobjects = {obj}"
 
         # evaluation tasks in given unseen env
-        test_tasks = []
-        with open(
-            f"{args.progprompt_path}/data/new_env/{args.test_set}_annotated.json",
-            "r",
-        ) as f:
-            for line in f.readlines():
-                test_tasks.append(list(json.loads(line).keys())[0])
+        test_tasks = [
+            list(annotation.keys())[0]
+            for annotation in load_annotations(
+                f"{args.progprompt_path}/data/new_env/{args.test_set}_annotated.json"
+            )
+        ]
         log_file.write(
             f"\n----Test set tasks----\n{test_tasks}\nTotal: {len(test_tasks)} tasks\n"
         )
 
     # evaluate in seen env
     if args.env_id == 0:
-        test_tasks = []
-        for file in os.listdir(f"{args.progprompt_path}/data/{args.test_set}"):
-            with open(
-                f"{args.progprompt_path}/data/{args.test_set}/{file}", "r"
-            ) as f:
-                for line in f.readlines():
-                    test_tasks.append(list(json.loads(line).keys())[0])
-
+        test_tasks = [
+            list(annotation.keys())[0]
+            for file in os.listdir(
+                f"{args.progprompt_path}/data/{args.test_set}"
+            )
+            for annotation in load_annotations(
+                f"{args.progprompt_path}/data/{args.test_set}/{file}"
+            )
+        ]
         log_file.write(
             f"\n----Test set tasks----\n{test_tasks}\nTotal: {len(test_tasks)} tasks\n"
         )
@@ -299,7 +301,7 @@ def planner_executer(args: RunEvalArguments):
 
     # generate plans for the test set
     if not args.load_generated_plans:
-        gen_plan = []
+        gen_plan: List[str] = []
         for task in test_tasks:
             print(f"Generating plan for: {task}\n")
             prompt_task = "def {fxn}():".format(fxn="_".join(task.split(" ")))
@@ -317,7 +319,7 @@ def planner_executer(args: RunEvalArguments):
                 time.sleep(90)
 
         # save generated plan
-        line = {}
+        line: Dict[str, str] = {}
         print(f"Saving generated plan at: {log_filename}_plans.json\n")
         with open(
             f"{args.progprompt_path}/results/{log_filename}_plans.json", "w"
@@ -329,14 +331,10 @@ def planner_executer(args: RunEvalArguments):
     # load from file
     else:
         print(f"Loading generated plan from: {log_filename}.json\n")
-        with open(
-            f"{args.progprompt_path}/results/{log_filename}_plans.json", "r"
-        ) as f:
-            data = json.load(f)
-            test_tasks, gen_plan = [], []
-            for k, v in data.items():
-                test_tasks.append(k)
-                gen_plan.append(v)
+        data = load_plan(
+            f"{args.progprompt_path}/results/{log_filename}_plans.json"
+        )
+        test_tasks, gen_plan = (list(e) for e in zip(*data.items()))
 
     log_file.write(
         f"\n----PROMPT for state check----\n{current_state_prompt}\n"
@@ -349,13 +347,11 @@ def planner_executer(args: RunEvalArguments):
     )
 
     # evaluate
-    final_states_GT = []
-    with open(
-        f"{args.progprompt_path}/data/final_states/final_states_{args.test_set}.json",
-        "r",
-    ) as f:
-        for line in f.readlines():
-            final_states_GT.append((json.loads(line)))
+    final_states_GT = list(
+        load_environment_states(
+            f"{args.progprompt_path}/data/final_states/final_states_{args.test_set}.json"
+        )
+    )
 
     results = eval(
         final_states,

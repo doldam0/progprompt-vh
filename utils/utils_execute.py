@@ -9,30 +9,29 @@
 # its affiliates is strictly prohibited.
 
 
-from io import TextIOWrapper
 import random
 import re
-from typing import List, Optional, Tuple, Union
+from io import TextIOWrapper
+from typing import List, Optional, Tuple, Union, cast
 
 from openai import OpenAI
 from openai.types.chat.chat_completion import ChatCompletion
-
 from virtualhome.demo.utils_demo import *  # type: ignore
 from virtualhome.simulation.evolving_graph import utils
-from virtualhome.simulation.evolving_graph.scripts import (
-    parse_script_line,
-    Script,
-)
-from virtualhome.simulation.evolving_graph.execution import ScriptExecutor
 from virtualhome.simulation.evolving_graph.environment import EnvironmentGraph
+from virtualhome.simulation.evolving_graph.execution import ScriptExecutor
+from virtualhome.simulation.evolving_graph.scripts import (
+    Script,
+    parse_script_line,
+)
 from virtualhome.simulation.unity_simulator.comm_unity import UnityCommunication
 
-from scripts.run_eval import RunEvalArguments
-from utils_aug_env import (
-    get_obj_ids_for_adding_states,
+from utils.arguments import RunEvalArguments
+from utils.types import EnvironmentState
+from utils.utils_aug_env import (
     add_additional_obj_states,
+    get_obj_ids_for_adding_states,
 )
-
 
 client = OpenAI()
 
@@ -143,10 +142,10 @@ def run_execution(
     test_tasks: List[str],
     gen_plan: List[str],
     log_file: TextIOWrapper,
-):
-    final_states = []
-    initial_states = []
-    exec_per_task = []
+) -> Tuple[List[EnvironmentState], List[EnvironmentState], List[float]]:
+    final_states: List[EnvironmentState] = []
+    initial_states: List[EnvironmentState] = []
+    exec_per_task: List[float] = []
 
     for task, plan in zip(test_tasks, gen_plan):
         ## initialize and set up enviroenment: visual + graph environment ##
@@ -592,6 +591,6 @@ def run_execution(
                 ]
 
         # get final state for eval
-        final_states.append(final_state)
+        final_states.append(cast(EnvironmentState, final_state))
         exec_per_task.append(executable_steps / total_steps)
     return final_states, initial_states, exec_per_task

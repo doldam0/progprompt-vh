@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Dict, List, Literal, TypedDict
 
-
 Plan = Dict[str, str]
 
 
 class EnvironmentState(TypedDict):
     nodes: List[Node]
+    edges: List[Edge]
 
 
 Annotation = Dict[str, Dict[str, List[str]]]
