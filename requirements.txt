@@ -1,2 +1,2 @@
 openai
-virtualhome
+alfworld[full]
