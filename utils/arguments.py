@@ -4,7 +4,6 @@ import argparse
 class RunEvalArguments(argparse.Namespace):
     progprompt_path: str
     expt_name: str
-    env: str
     openai_api_key: str
     unity_filename: str
     port: str
@@ -24,13 +23,6 @@ def parse_args() -> RunEvalArguments:
 
     parser.add_argument("--progprompt-path", type=str, required=True)
     parser.add_argument("--expt-name", type=str, required=True)
-    parser.add_argument(
-        "--env",
-        "-e",
-        type=str,
-        default="virtualhome",
-        choices=["virtualhome", "ai2thor"],
-    )
 
     parser.add_argument("--openai-api-key", type=str, default="sk-xyz")
     parser.add_argument(
