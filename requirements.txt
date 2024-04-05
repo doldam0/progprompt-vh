@@ -1,2 +1,2 @@
-openai
-alfworld[full]
+openai==1.16.2
+alfworld[full]==0.3.3
