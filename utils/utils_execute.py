@@ -9,61 +9,73 @@
 # its affiliates is strictly prohibited.
 
 
+import json
+import os
 import random
 import re
 from io import TextIOWrapper
 from typing import List, Optional, Tuple, Union, cast
 
+import numpy as np
 from openai import OpenAI
 from openai.types.chat.chat_completion import ChatCompletion
-from virtualhome.demo.utils_demo import *  # type: ignore
-from virtualhome.simulation.evolving_graph import utils
-from virtualhome.simulation.evolving_graph.environment import EnvironmentGraph
-from virtualhome.simulation.evolving_graph.execution import ScriptExecutor
-from virtualhome.simulation.evolving_graph.scripts import (
-    Script,
-    parse_script_line,
-)
-from virtualhome.simulation.unity_simulator.comm_unity import UnityCommunication
 
+from utils.alfworld import CustomThorEnv, get_visible_nodes
 from utils.arguments import RunEvalArguments
-from utils.types import EnvironmentState
+from utils.types import Graph, TrajectoryData
 from utils.utils_aug_env import (
     add_additional_obj_states,
     get_obj_ids_for_adding_states,
 )
 
-client = OpenAI()
 
+class LM:
+    def __init__(
+        self,
+        model: str,
+        *,
+        api_key: str,
+        max_tokens: int = 128,
+        temperature: float = 0,
+        stop: Optional[Union[str, List[str]]] = None,
+        logprobs: int = 1,
+        frequency_penalty: float = 0,
+    ):
+        os.environ["OPENAI_API_KEY"] = api_key
 
-def LM(
-    prompt: str,
-    model: str,
-    max_tokens: int = 128,
-    temperature: float = 0,
-    stop: Optional[Union[str, List[str]]] = None,
-    logprobs: int = 1,
-    frequency_penalty: float = 0,
-) -> Tuple[ChatCompletion, str]:
+        self.__model = model
+        self.__max_tokens = max_tokens
+        self.__temperature = temperature
+        self.__stop = stop
+        self.__logprobs = logprobs
+        self.__frequency_penalty = frequency_penalty
 
-    ## function to query LM ##
-    # you may adjust the genration parameters as needed
-    # more info on parameters here:
-    # https://platform.openai.com/docs/api-reference/completions/create
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "user", "content": prompt},
-        ],
-        max_tokens=max_tokens,
-        temperature=temperature,
-        stop=stop,
-        top_logprobs=logprobs,
-        frequency_penalty=frequency_penalty,
-    )
+        self.__client = OpenAI()
 
-    message = response.choices[0].message.content
-    return response, message.strip() if message is not None else ""
+    def execute(
+        self,
+        prompt: str,
+    ) -> Tuple[ChatCompletion, str]:
+
+        ## function to query LM ##
+        # you may adjust the genration parameters as needed
+        # more info on parameters here:
+        # https://platform.openai.com/docs/api-reference/completions/create
+        response = self.__client.chat.completions.create(
+            model=self.__model,
+            messages=[
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=self.__max_tokens,
+            temperature=self.__temperature,
+            stop=self.__stop,
+            logprobs=True,
+            top_logprobs=self.__logprobs,
+            frequency_penalty=self.__frequency_penalty,
+        )
+
+        message = response.choices[0].message.content
+        return response, message.strip() if message is not None else ""
 
 
 def get_current_state_prompt():
@@ -138,46 +150,39 @@ current_state_prompt = get_current_state_prompt()
 
 def run_execution(
     args: RunEvalArguments,
-    comm: UnityCommunication,
-    test_tasks: List[str],
-    gen_plan: List[str],
+    env: CustomThorEnv,
+    model: LM,
+    trajectories: list[tuple[str, TrajectoryData]],
+    tasks: list[str],
+    gen_plan: list[str],
     log_file: TextIOWrapper,
-) -> Tuple[List[EnvironmentState], List[EnvironmentState], List[float]]:
-    final_states: List[EnvironmentState] = []
-    initial_states: List[EnvironmentState] = []
+) -> Tuple[List[Graph], List[Graph], List[float]]:
+    final_states: List[Graph] = []
+    initial_states: List[Graph] = []
     exec_per_task: List[float] = []
 
-    for task, plan in zip(test_tasks, gen_plan):
-        ## initialize and set up enviroenment: visual + graph environment ##
-        comm.reset(args.env_id)
-        comm.add_character("Chars/Male2", initial_room="kitchen")
+    task_to_plan = {task: plan for task, plan in zip(tasks, gen_plan)}
 
-        _, graph = comm.environment_graph()
-        _, cc = comm.camera_count()
+    for traj_root, traj_data in trajectories:
+        ## initialize and set up enviroenment: visual + graph environment ##
+        env.reset(traj_root, traj_data)
+        # TODO: Check if this is needed
+        # env.add_character("Chars/Male2", initial_room="kitchen")
+
+        task_name = traj_data["task_type"]
+        if task_name not in task_to_plan:
+            continue
+        plan = task_to_plan[task_name]
+
+        graph = env.environment_graph()
+        cc = env.camera_count()
         initial_states.append(graph)
 
-        env_graph = EnvironmentGraph(graph)
-        name_equivalence = utils.load_name_equivalence()
-        executor = ScriptExecutor(env_graph, name_equivalence)
-
         ## get agent's initial state ##
-        agent = next(
-            n["id"] for n in graph["nodes"] if n["class_name"] == "character"
-        )
-        agent_in_roomid = next(
-            n["to_id"]
-            for n in graph["edges"]
-            if n["from_id"] == agent and n["relation_type"] == "INSIDE"
-        )
-        agent_in_room = next(
-            n["class_name"]
-            for n in graph["nodes"]
-            if n["id"] == agent_in_roomid
-        )
         agent_has_objid = [
             n["to_id"]
             for n in graph["edges"]
-            if n["from_id"] == agent and "HOLD" in n["relation_type"]
+            if n["from_id"] == "agent" and "HOLD" in n["relation_type"]
         ]
         agent_has_obj = [
             n["class_name"]
@@ -185,14 +190,14 @@ def run_execution(
             if n["id"] in agent_has_objid
         ]
         # some actions might not execute in the visual simulation, but they will in evolving graphs
-        images = []
-        _, im = comm.camera_image([cc - 5], image_width=300, image_height=300)
+        images: list[np.ndarray] = []
+        im = env.camera_image([cc - 5], image_width=300, image_height=300)
         images.append(im[0])
         # s, obj = comm.get_visible_objects(cc-6)
         obj_ids_for_adding_states = get_obj_ids_for_adding_states(graph)
         nodes_with_additional_states = {}
 
-        partial_graph = utils.get_visible_nodes(graph, agent_id=agent)
+        partial_graph = get_visible_nodes(graph)
 
         obj_ids_close = [
             n["to_id"]
@@ -211,17 +216,15 @@ def run_execution(
         }
         relations = list(
             set(
-                [
-                    obj_ids[n["from_id"]]
-                    + " "
-                    + n["relation_type"]
-                    + " "
-                    + obj_ids[n["to_id"]]
-                    for n in graph["edges"]
-                    if n["from_id"] in obj_ids
-                    and n["to_id"] in obj_ids
-                    and n["relation_type"] not in ["CLOSE", "FACING", "INSIDE"]
-                ]
+                obj_ids[n["from_id"]]
+                + " "
+                + n["relation_type"]
+                + " "
+                + obj_ids[n["to_id"]]
+                for n in graph["edges"]
+                if n["from_id"] in obj_ids
+                and n["to_id"] in obj_ids
+                and n["relation_type"] not in ["CLOSE", "FACING", "INSIDE"]
             )
         )
         obj_states = [
@@ -250,9 +253,9 @@ def run_execution(
             objs += f" You have {agent_has_obj}. "
 
         ## parse plan into subgoals ##
-        log_file.write(f"\n--Executing task: {task}--\n")
+        log_file.write(f"\n--Executing task: {traj_data['task_type']}--\n")
         log_file.write(f"Plan:  {plan}\n\n")
-        print(f"Executing: {task}\n")
+        print(f"Executing: {traj_data['task_type']}\n")
 
         subgoals = {}
         subgoals["0"] = []
@@ -301,12 +304,7 @@ def run_execution(
                     current_state = (
                         f"{current_state_prompt}\n\n{state}\n\n{action}\n"
                     )
-                    _, check_state = LM(
-                        current_state,
-                        args.gpt_version,
-                        max_tokens=2,
-                        stop=["\n"],
-                    )
+                    _, check_state = model.execute(current_state)
                     log_file.write(
                         f"State check:\n{state}\n{action}\n{check_state.strip()}\n"
                     )
@@ -331,12 +329,7 @@ def run_execution(
                                 ]
                             )
                             current_state = f"{current_state_prompt}\n\n{state}\n\n{action}\n"
-                            _, check_state = LM(
-                                current_state,
-                                args.gpt_version,
-                                max_tokens=2,
-                                stop=["\n"],
-                            )
+                            _, check_state = model.execute(current_state)
                             log_file.write(
                                 f"State check:\n{state}\n{action}\n{check_state.strip()}\n"
                             )
@@ -428,12 +421,10 @@ def run_execution(
 
                 ## execute next action in both envs: visual and graph
                 log_file.write(f"{script_instruction}\n")
-                _, m = comm.render_script(
-                    [script_instruction],
-                    recording=False,
-                    skip_animation=True,
-                    find_solution=True,
-                )
+                env.render_script(script_instruction)
+                if not env.get_goal_satisfied():
+                    continue
+                """
                 script = script_instruction[7:]
                 try:
                     script = parse_script_line(script, 0)
@@ -442,145 +433,131 @@ def run_execution(
                     continue
                 print(script)
                 success, final_state, _ = executor.execute(Script([script]))
+                """
 
-                if not success:
-                    log_file.write(
-                        f"act_success: {success}, message: {executor.info.get_error_string()}\n"
+                # count execution if action executes succesfully in graph env
+                executable_steps += 1
+                # _, graph = comm.environment_graph()
+                final_state = env.environment_graph()
+                graph = final_state
+                agent = next(
+                    n["id"]
+                    for n in graph["nodes"]
+                    if n["class_name"] == "character"
+                )
+                partial_graph = get_visible_nodes(final_state)
+                script_instruction = " ".join(
+                    re.findall(r"\b[a-z]+", script_instruction)[1:]
+                )
+                step += 1
+
+                # get new state info
+                agent = next(
+                    n["id"]
+                    for n in graph["nodes"]
+                    if n["class_name"] == "character"
+                )
+                agent_in_roomid = next(
+                    n["to_id"]
+                    for n in graph["edges"]
+                    if n["from_id"] == agent and n["relation_type"] == "INSIDE"
+                )
+                agent_in_room = next(
+                    n["class_name"]
+                    for n in graph["nodes"]
+                    if n["id"] == agent_in_roomid
+                )
+                agent_has_objid = [
+                    n["to_id"]
+                    for n in graph["edges"]
+                    if n["from_id"] == agent and "HOLD" in n["relation_type"]
+                ]
+                agent_has_obj = [
+                    n["class_name"]
+                    for n in graph["nodes"]
+                    if n["id"] in agent_has_objid
+                ]
+
+                # Here you can get an observation, for instance
+                if (
+                    "grab" in script_instruction
+                    or "open" in script_instruction
+                    or "close" in script_instruction
+                ):
+                    s, im = env.camera_image(
+                        [cc - 5], image_width=300, image_height=300
                     )
-                    step += 1
                 else:
-                    # count execution if action executes succesfully in graph env
-                    executable_steps += 1
-                    # _, graph = comm.environment_graph()
-                    graph = final_state.to_dict()
-                    env_graph = EnvironmentGraph(graph)
-                    agent = next(
-                        n["id"]
-                        for n in graph["nodes"]
-                        if n["class_name"] == "character"
+                    s, im = env.camera_image(
+                        [cc - 6], image_width=300, image_height=300
                     )
-                    partial_graph = utils.get_visible_nodes(
-                        final_state.to_dict(), agent_id=agent
-                    )
-                    name_equivalence = utils.load_name_equivalence()
-                    executor = ScriptExecutor(env_graph, name_equivalence)
-                    script_instruction = " ".join(
-                        re.findall(r"\b[a-z]+", script_instruction)[1:]
-                    )
-                    step += 1
+                images.append(im[0])
 
-                    # get new state info
-                    agent = next(
-                        n["id"]
-                        for n in graph["nodes"]
-                        if n["class_name"] == "character"
-                    )
-                    agent_in_roomid = next(
-                        n["to_id"]
-                        for n in graph["edges"]
-                        if n["from_id"] == agent
-                        and n["relation_type"] == "INSIDE"
-                    )
-                    agent_in_room = next(
-                        n["class_name"]
-                        for n in graph["nodes"]
-                        if n["id"] == agent_in_roomid
-                    )
-                    agent_has_objid = [
-                        n["to_id"]
-                        for n in graph["edges"]
-                        if n["from_id"] == agent
-                        and "HOLD" in n["relation_type"]
-                    ]
-                    agent_has_obj = [
-                        n["class_name"]
-                        for n in graph["nodes"]
-                        if n["id"] in agent_has_objid
-                    ]
-
-                    # Here you can get an observation, for instance
-                    if (
-                        "grab" in script_instruction
-                        or "open" in script_instruction
-                        or "close" in script_instruction
-                    ):
-                        s, im = comm.camera_image(
-                            [cc - 5], image_width=300, image_height=300
-                        )
-                    else:
-                        s, im = comm.camera_image(
-                            [cc - 6], image_width=300, image_height=300
-                        )
-                    images.append(im[0])
-
-                    obj_ids_close = [
-                        n["to_id"]
-                        for n in graph["edges"]
-                        if n["from_id"] == agent
-                        and n["relation_type"] == "CLOSE"
-                    ]
-                    obj = [
-                        node["class_name"]
+                obj_ids_close = [
+                    n["to_id"]
+                    for n in graph["edges"]
+                    if n["from_id"] == agent and n["relation_type"] == "CLOSE"
+                ]
+                obj = [
+                    node["class_name"]
+                    for node in partial_graph["nodes"]
+                    if node["id"] in obj_ids_close
+                ]
+                obj_ids = dict(
+                    [
+                        (node["id"], node["class_name"])
                         for node in partial_graph["nodes"]
                         if node["id"] in obj_ids_close
+                        and node["class_name"] != agent_in_room
                     ]
-                    obj_ids = dict(
+                )
+                nodes_with_additional_states = add_additional_obj_states(
+                    partial_graph,
+                    obj_ids_for_adding_states,
+                    nodes_with_additional_states,
+                )
+
+                relations = list(
+                    set(
                         [
-                            (node["id"], node["class_name"])
-                            for node in partial_graph["nodes"]
-                            if node["id"] in obj_ids_close
-                            and node["class_name"] != agent_in_room
+                            obj_ids[n["from_id"]]
+                            + " "
+                            + n["relation_type"]
+                            + " "
+                            + obj_ids[n["to_id"]]
+                            for n in graph["edges"]
+                            if n["from_id"] in obj_ids
+                            and n["to_id"] in obj_ids
+                            and n["relation_type"] not in ["CLOSE", "FACING"]
                         ]
                     )
-                    nodes_with_additional_states = add_additional_obj_states(
-                        partial_graph,
-                        obj_ids_for_adding_states,
-                        nodes_with_additional_states,
-                    )
-
-                    relations = list(
-                        set(
-                            [
-                                obj_ids[n["from_id"]]
-                                + " "
-                                + n["relation_type"]
-                                + " "
-                                + obj_ids[n["to_id"]]
-                                for n in graph["edges"]
-                                if n["from_id"] in obj_ids
-                                and n["to_id"] in obj_ids
-                                and n["relation_type"]
-                                not in ["CLOSE", "FACING"]
-                            ]
+                )
+                obj_states = [
+                    (node["class_name"], node["states"])
+                    for node in graph["nodes"]
+                    if node["class_name"] in obj
+                ]
+                objs = ""
+                for ob_states in obj_states:
+                    if len(ob_states[1]) > 0:
+                        objs = (
+                            objs
+                            + ob_states[0]
+                            + " is "
+                            + " and ".join(ob_states[1])
+                            + ", "
                         )
-                    )
-                    obj_states = [
-                        (node["class_name"], node["states"])
-                        for node in graph["nodes"]
-                        if node["class_name"] in obj
-                    ]
-                    objs = ""
-                    for ob_states in obj_states:
-                        if len(ob_states[1]) > 0:
-                            objs = (
-                                objs
-                                + ob_states[0]
-                                + " is "
-                                + " and ".join(ob_states[1])
-                                + ", "
-                            )
-                        else:
-                            objs = objs + ob_states[0] + ", "
-                    objs = list(set(objs.split(", ")))
-                    objs = [ob for ob in objs if len(ob) > 0]
-                    objs = ", ".join(objs) + ", " + ", ".join(relations) + ". "
+                    else:
+                        objs = objs + ob_states[0] + ", "
+                objs = list(set(objs.split(", ")))
+                objs = [ob for ob in objs if len(ob) > 0]
+                objs = ", ".join(objs) + ", " + ", ".join(relations) + ". "
 
-                    if len(agent_has_obj) > 0:
-                        agent_has_obj = ", ".join(agent_has_obj)
-                        objs += f" You have {agent_has_obj}. "
+                if len(agent_has_obj) > 0:
+                    agent_has_obj = ", ".join(agent_has_obj)
+                    objs += f" You have {agent_has_obj}. "
 
         # augment state with additional state info
-        final_state = final_state.to_dict()
         for idx in range(len(final_state["nodes"])):
             if (
                 final_state["nodes"][idx]["id"]
@@ -591,6 +568,6 @@ def run_execution(
                 ]
 
         # get final state for eval
-        final_states.append(cast(EnvironmentState, final_state))
+        final_states.append(cast(Graph, final_state))
         exec_per_task.append(executable_steps / total_steps)
     return final_states, initial_states, exec_per_task

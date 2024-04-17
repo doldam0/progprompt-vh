@@ -2,14 +2,14 @@ import argparse
 
 
 class RunEvalArguments(argparse.Namespace):
+    data_root: str
     progprompt_path: str
     expt_name: str
     openai_api_key: str
-    unity_filename: str
-    port: str
     display: str
+    screen_height: int
+    screen_width: int
     gpt_version: str
-    env_id: int
     test_set: str
     prompt_task_examples: str
     seed: int
@@ -21,27 +21,26 @@ class RunEvalArguments(argparse.Namespace):
 def parse_args() -> RunEvalArguments:
     parser = argparse.ArgumentParser()
 
+    parser.add_argument("data_root", type=str)
     parser.add_argument("--progprompt-path", type=str, required=True)
     parser.add_argument("--expt-name", type=str, required=True)
 
     parser.add_argument("--openai-api-key", type=str, default="sk-xyz")
-    parser.add_argument(
-        "--unity-filename", type=str, default="/path/to/macos_exec.v2.3.0.app"
-    )
-    parser.add_argument("--port", type=str, default="8000")
     parser.add_argument("--display", type=str, default="0")
+    parser.add_argument("--screen-height", type=int, default=300)
+    parser.add_argument("--screen-width", type=int, default=300)
 
     parser.add_argument(
         "--gpt-version",
         type=str,
-        default="text-davinci-002",
-        choices=["text-davinci-002", "davinci", "code-davinci-002"],
+        default="gpt-3.5-turbo",
+        choices=["gpt-3.5-turbo", "davinci", "curie"],
     )
-    parser.add_argument("--env-id", type=int, default=0)
+
     parser.add_argument(
         "--test-set",
         type=str,
-        default="test_unseen",
+        default="env1",
         choices=[
             "test_unseen",
             "test_seen",
@@ -50,7 +49,6 @@ def parse_args() -> RunEvalArguments:
             "env2",
         ],
     )
-
     parser.add_argument(
         "--prompt-task-examples",
         type=str,

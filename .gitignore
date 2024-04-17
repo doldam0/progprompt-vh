@@ -162,3 +162,4 @@ cython_debug/
 virtualhome/*
 nohup.out
 error*.log
+.vscode/

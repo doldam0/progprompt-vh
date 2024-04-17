@@ -13,27 +13,27 @@
 This script evaluates plan generation using openAI LLMs
 for the VirtualHome environment tasks
 """
-
+import os.path as osp
 import sys
 
-from utils.loads import load_annotations, load_environment_states, load_plan
-
-sys.path.append("virtualhome/simulation")
-sys.path.append("virtualhome/demo")
-sys.path.append("virtualhome")
+sys.path.append(osp.join(osp.dirname(osp.abspath(__file__)), ".."))
 
 import json
 import os
-import os.path as osp
 import random
 import time
 from typing import Dict, List, TypedDict
 
 import openai
-from virtualhome.demo.utils_demo import *  # type: ignore
-from virtualhome.simulation.unity_simulator.comm_unity import UnityCommunication
 
+from utils.alfworld import CustomThorEnv
 from utils.arguments import RunEvalArguments, parse_args
+from utils.loads import (
+    load_annotations,
+    load_environment_states,
+    load_plan,
+    load_trajectories,
+)
 from utils.utils_execute import *
 
 
@@ -45,9 +45,9 @@ class EvaluationResult(TypedDict):
 
 
 def eval(
-    final_states: List[EnvironmentState],
-    final_states_GT: List[EnvironmentState],
-    initial_states: List[EnvironmentState],
+    final_states: List[Graph],
+    final_states_GT: List[Graph],
+    initial_states: List[Graph],
     test_tasks: List[str],
     exec_per_task: List[float],
     log_file: TextIOWrapper,
@@ -179,14 +179,18 @@ def eval(
 def planner_executer(args: RunEvalArguments):
 
     # initialize env
-    comm = UnityCommunication(
-        file_name=args.unity_filename, port=args.port, x_display=args.display
+    env = CustomThorEnv(
+        x_display=args.display,
+        player_screen_height=args.screen_height,
+        player_screen_width=args.screen_width,
     )
 
-    # prompt example environment is set to env_id 0
-    comm.reset(0)
+    trajs = load_trajectories(args.data_root)
 
-    _, env_graph = comm.environment_graph()
+    # prompt example environment is set to env_id 0
+    env.reset(*trajs[0])
+
+    env_graph = env.environment_graph()
     obj = list(set([node["class_name"] for node in env_graph["nodes"]]))
 
     # define available actions and append avaailable objects from the env
@@ -265,39 +269,38 @@ def planner_executer(args: RunEvalArguments):
     test_tasks: List[str] = []
 
     # evaluate in given unseen env
-    if args.env_id != 0:
-        comm.reset(args.env_id)
-        _, graph = comm.environment_graph()
-        obj = list(set([node["class_name"] for node in graph["nodes"]]))
-        prompt += f"\n\n\nobjects = {obj}"
+    env.reset(*trajs[0])
+    graph = env.environment_graph()
+    obj = list(set([node["class_name"] for node in graph["nodes"]]))
+    prompt += f"\n\n\nobjects = {obj}"
 
-        # evaluation tasks in given unseen env
-        test_tasks = [
-            list(annotation.keys())[0]
-            for annotation in load_annotations(
-                f"{args.progprompt_path}/data/new_env/{args.test_set}_annotated.json"
-            )
-        ]
-        log_file.write(
-            f"\n----Test set tasks----\n{test_tasks}\nTotal: {len(test_tasks)} tasks\n"
+    # evaluation tasks in given unseen env
+    test_tasks = [
+        list(annotation.keys())[0]
+        for annotation in load_annotations(
+            f"{args.progprompt_path}/data/new_env/{args.test_set}_annotated.json"
         )
-
-    # evaluate in seen env
-    if args.env_id == 0:
-        test_tasks = [
-            list(annotation.keys())[0]
-            for file in os.listdir(
-                f"{args.progprompt_path}/data/{args.test_set}"
-            )
-            for annotation in load_annotations(
-                f"{args.progprompt_path}/data/{args.test_set}/{file}"
-            )
-        ]
-        log_file.write(
-            f"\n----Test set tasks----\n{test_tasks}\nTotal: {len(test_tasks)} tasks\n"
-        )
+    ]
+    log_file.write(
+        f"\n----Test set tasks----\n{test_tasks}\nTotal: {len(test_tasks)} tasks\n"
+    )
 
     # test_tasks = test_tasks[:3] ## debug to check changes
+
+    planning_model = LM(
+        args.gpt_version,
+        api_key=args.openai_api_key,
+        max_tokens=600,
+        stop=["def"],
+        frequency_penalty=0.15,
+    )
+
+    executing_model = LM(
+        args.gpt_version,
+        api_key=args.openai_api_key,
+        max_tokens=2,
+        stop=["\n"],
+    )
 
     # generate plans for the test set
     if not args.load_generated_plans:
@@ -306,13 +309,7 @@ def planner_executer(args: RunEvalArguments):
             print(f"Generating plan for: {task}\n")
             prompt_task = "def {fxn}():".format(fxn="_".join(task.split(" ")))
             curr_prompt = f"{prompt}\n\n{prompt_task}\n\t"
-            _, text = LM(
-                curr_prompt,
-                args.gpt_version,
-                max_tokens=600,
-                stop=["def"],
-                frequency_penalty=0.15,
-            )
+            _, text = planning_model.execute(curr_prompt)
             gen_plan.append(text)
             # because codex has query limit per min
             if args.gpt_version == "code-davinci-002":
@@ -343,7 +340,7 @@ def planner_executer(args: RunEvalArguments):
     # run execution
     print(f"\n----Runing execution----\n")
     final_states, initial_states, exec_per_task = run_execution(
-        args, comm, test_tasks, gen_plan, log_file
+        args, env, executing_model, trajs, test_tasks, gen_plan, log_file
     )
 
     # evaluate
