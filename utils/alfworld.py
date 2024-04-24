@@ -1,24 +1,11 @@
 from __future__ import annotations
 
-import json
-import os
 from typing import Any, Callable, override
 
 import alfworld.gen.constants as constants
 import numpy as np
-import regex
 from alfworld.agents.controller.oracle_astar import OracleAStarAgent
 from alfworld.env.thor_env import ThorEnv
-from alfworld.gen.constants import (
-    AGENT_STEP_SIZE,
-    CAMERA_HEIGHT_OFFSET,
-    RECORD_SMOOTHING_FACTOR,
-    RENDER_CLASS_IMAGE,
-    RENDER_DEPTH_IMAGE,
-    RENDER_IMAGE,
-    RENDER_OBJECT_IMAGE,
-    VISIBILITY_DISTANCE,
-)
 
 from utils.relations import Relation, relate
 from utils.types import (
@@ -30,9 +17,6 @@ from utils.types import (
     Node,
     TrajectoryData,
 )
-
-_PATTERN_ACTION = r"^\[(\w+)\]"
-_PATTERN_PARAMS = r"\<(.+?)\>\s*\((.+?)\)"
 
 
 def bbox_from_alfred(alfred_bbox: AlfredBoundingBox) -> BoundingBox:
