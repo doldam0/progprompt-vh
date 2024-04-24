@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, NewType, NotRequired, TypedDict
+from typing import Any, NewType, NotRequired, TypedDict, TypeGuard, TypeVarTuple
+
+Ts = TypeVarTuple("Ts")
 
 Plan = dict[str, str]
 
@@ -29,6 +31,14 @@ class Edge(TypedDict):
     from_id: str
     relation_type: str
     to_id: str
+
+
+def edge_from_tuple(edge_tuple: tuple[str, str, str]) -> Edge:
+    return Edge(
+        from_id=edge_tuple[0],
+        relation_type=edge_tuple[1],
+        to_id=edge_tuple[2],
+    )
 
 
 class BoundingBox(TypedDict):

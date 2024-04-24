@@ -3,26 +3,26 @@ from typing import Literal, overload
 
 
 class Relations(str, Enum):
-    IS = "IS"
-    HOLD = "HOLD"
-    INSIDE = "INSIDE"
-    ON = "ON"
-    CLOSE = "CLOSE"
+    IS = "is"
+    HOLD = "hold"
+    INSIDE = "inside"
+    ON = "on"
+    CLOSE = "close"
 
 
-RelationKeys = Literal["IS", "HOLD", "INSIDE", "ON", "CLOSE"]
+RelationKeys = Literal["is", "hold", "inside", "on", "close"]
 
 
 class States(str, Enum):
-    OPEN = "OPEN"
-    CLOSED = "CLOSED"
-    ON = "ON"
-    OFF = "OFF"
-    PLUGGED_IN = "PLUGGED_IN"
-    PLUGGED_OUT = "PLUGGED_OUT"
+    OPEN = "open"
+    CLOSED = "closed"
+    ON = "on"
+    OFF = "off"
+    PLUGGED_IN = "plugged_in"
+    PLUGGED_OUT = "plugged_out"
 
 
-StateKeys = Literal["OPEN", "CLOSED", "ON", "OFF", "PLUGGED_IN", "PLUGGED_OUT"]
+StateKeys = Literal["open", "closed", "on", "off", "plugged_in", "plugged_out"]
 
 
 class Relation:
@@ -78,25 +78,25 @@ class InsideRelation(Relation):
 
 @overload
 def relate(
-    left: str, relation: Literal["IS"], right: StateKeys
+    left: str, relation: Literal["is"], right: StateKeys
 ) -> StateRelation: ...
 
 
 @overload
 def relate(
-    left: Literal["agent"], relation: Literal["HOLD"], right: str
+    left: Literal["agent"], relation: Literal["hold"], right: str
 ) -> HoldsRelation: ...
 
 
 @overload
 def relate(
-    left: str, relation: Literal["INSIDE"], right: str
+    left: str, relation: Literal["inside"], right: str
 ) -> InsideRelation: ...
 
 
 @overload
 def relate(
-    left: str, relation: Literal["ON", "CLOSE"], right: str
+    left: str, relation: Literal["on", "close"], right: str
 ) -> Relation: ...
 
 

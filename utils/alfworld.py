@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, override
+from typing import Any, Callable, cast, overload, override
 
 import alfworld.gen.constants as constants
 import numpy as np
@@ -16,6 +16,7 @@ from utils.types import (
     Graph,
     Node,
     TrajectoryData,
+    edge_from_tuple,
 )
 
 
@@ -35,6 +36,12 @@ def bbox_from_alfred(alfred_bbox: AlfredBoundingBox) -> BoundingBox:
             bottom_right["z"] - top_left["z"],
         ],
     )
+
+
+def add_vector3d(
+    v1: tuple[float, float, float], v2: tuple[float, float, float]
+) -> tuple[float, float, float]:
+    return v1[0] + v2[0], v1[1] + v2[1], v1[2] + v2[2]
 
 
 def get_object_position(obj: AlfredObject) -> tuple[float, float, float]:
@@ -205,19 +212,19 @@ class CustomThorEnv(ThorEnv):
         for i, obj in enumerate(visible_objects):
             if obj["receptacle"] and obj["receptacleObjectIds"] is not None:
                 for receptacle in obj["receptacleObjectIds"]:
-                    rel = relate(receptacle, "ON", obj["objectId"])
+                    rel = relate(receptacle, "on", obj["objectId"])
                     relations.append(rel)
             if obj["pickupable"] and obj["isPickedUp"]:
-                rel = relate("agent", "HOLD", obj["objectId"])
+                rel = relate("agent", "hold", obj["objectId"])
                 relations.append(rel)
             if obj["toggleable"]:
                 rel = relate(
-                    obj["objectId"], "IS", "ON" if obj["isToggled"] else "OFF"
+                    obj["objectId"], "is", "on" if obj["isToggled"] else "off"
                 )
                 relations.append(rel)
             if obj["openable"]:
                 rel = relate(
-                    obj["objectId"], "IS", "OPEN" if obj["isOpen"] else "CLOSED"
+                    obj["objectId"], "is", "open" if obj["isOpen"] else "closed"
                 )
                 relations.append(rel)
             for target in visible_objects[(i + 1) :]:
@@ -228,20 +235,25 @@ class CustomThorEnv(ThorEnv):
                     continue
                 distance = get_object_distance(obj, target)
                 if distance < distance_threshold:
-                    rel = relate(obj["objectId"], "CLOSE", target["objectId"])
+                    rel = relate(obj["objectId"], "close", target["objectId"])
                     relations.append(rel)
 
         return relations
 
-    def environment_graph(self, *, distance_threshold: float = 0.5) -> Graph:
+    def environment_graph(
+        self, *, only_visible: bool = True, distance_threshold: float = 0.5
+    ) -> Graph:
         relations = self.extract_relations(
             distance_threshold=distance_threshold
         )
         nodes: list[Node] = []
         edges: list[Edge] = []
 
-        visible_objects = filter(lambda elem: elem["visible"], self.objects)
-        for obj in visible_objects:
+        if only_visible:
+            target_objects = filter(lambda elem: elem["visible"], self.objects)
+        else:
+            target_objects = self.objects
+        for obj in target_objects:
             obj_nid = self.id2nid(obj["objectId"])
             node: Node = {
                 "id": obj_nid,
@@ -301,6 +313,148 @@ class CustomThorEnv(ThorEnv):
             script = [script]
         for s in script:
             self.__render_single_script(s)
+
+    def toggle_object(self, obj: AlfredObject | str, /, toggle: bool) -> None:
+        if isinstance(obj, str):
+            obj = self.get_obj_from_id(obj)
+        self.step(
+            {
+                "action": "ToggleObjectOn",
+                "objectId": obj["objectId"],
+                "toggleOn": toggle,
+            }
+        )
+
+    @overload
+    def move_object(
+        self,
+        obj: AlfredObject | str,
+        *,
+        on: AlfredObject,
+        relative_position: tuple[float, float, float] | None = None,
+        rotation: tuple[float, float, float] | None = None,
+    ) -> None: ...
+
+    @overload
+    def move_object(
+        self,
+        obj: AlfredObject | str,
+        *,
+        position: tuple[float, float, float] | None = None,
+        rotation: tuple[float, float, float] | None = None,
+    ) -> None: ...
+
+    def move_object(
+        self,
+        obj: AlfredObject | str,
+        *,
+        position: tuple[float, float, float] | None = None,
+        rotation: tuple[float, float, float] | None = None,
+        on: AlfredObject | None = None,
+        relative_position: tuple[float, float, float] | None = None,
+    ) -> None:
+        if isinstance(obj, str):
+            obj = self.get_obj_from_id(obj)
+
+        if position is None:
+            if on is not None:
+                if relative_position is not None:
+                    relative_position = relative_position
+                else:
+                    relative_position = (0, 0, 0)
+                position = add_vector3d(
+                    get_object_position(on), relative_position
+                )
+            else:
+                position = get_object_position(obj)
+
+        if rotation is None:
+            rotation = get_object_rotation(obj)
+
+        self.step(
+            {
+                "action": "SetObjectPoses",
+                "objectPoses": [
+                    {
+                        "objectName": obj["name"],
+                        "position": {
+                            "x": position[0],
+                            "y": position[1],
+                            "z": position[2],
+                        },
+                        "rotation": {
+                            "x": rotation[0],
+                            "y": rotation[1],
+                            "z": rotation[2],
+                        },
+                    }
+                ]
+                + [
+                    {
+                        "objectName": elem["name"],
+                        "position": elem["position"],
+                        "rotation": elem["rotation"],
+                    }
+                    for elem in self.metadata["objects"]
+                    if elem["pickupable"] and elem["name"] != obj["name"]
+                ],
+            }
+        )
+
+    def remove_object(self, obj: AlfredObject) -> None:
+        self.step(
+            {
+                "action": "RemoveFromScene",
+                "objectId": obj["objectId"],
+            }
+        )
+
+    def check_conditions(
+        self,
+        conditions: list[tuple[str, str, str]] | list[Edge],
+        *,
+        distance_threshold: float = 0.5,
+    ) -> bool:
+        if all(isinstance(cond, tuple) for cond in conditions):
+            conditions = list(map(edge_from_tuple, conditions))  # type: ignore
+
+        conditions = cast(list[Edge], conditions)
+        for cond in conditions:
+            from_obj = self.get_obj_from_id(cond["from_id"])
+            to_obj = self.get_obj_from_id(cond["to_id"])
+
+            match cond["relation_type"]:
+                case "is":
+                    match cond["to_id"]:
+                        case "open":
+                            if not from_obj["isOpen"]:
+                                return False
+                        case "closed":
+                            if from_obj["isOpen"]:
+                                return False
+                        case "on":
+                            if not from_obj["isToggled"]:
+                                return False
+                        case "off":
+                            if from_obj["isToggled"]:
+                                return False
+                        case _:
+                            raise ValueError(f"Unknown state: {cond}")
+                case "hold":
+                    if not to_obj["isPickedUp"]:
+                        return False
+                case "on":
+                    if not from_obj["isToggled"]:
+                        return False
+                case "close":
+                    if (
+                        get_object_distance(from_obj, to_obj)
+                        > distance_threshold
+                    ):
+                        return False
+                case _:
+                    raise ValueError(f"Unknown condition: {cond}")
+        return True
 
 
 def get_visible_nodes(graph: Graph) -> Graph:
