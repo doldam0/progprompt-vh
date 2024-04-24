@@ -13,13 +13,13 @@
 This script evaluates plan generation using openAI LLMs
 for the VirtualHome environment tasks
 """
+import os
 import os.path as osp
 import sys
 
 sys.path.append(osp.join(osp.dirname(osp.abspath(__file__)), ".."))
 
 import json
-import os
 import random
 import time
 from typing import Dict, List, TypedDict
