@@ -15,7 +15,6 @@ from utils.types import (
     Edge,
     Graph,
     Node,
-    ObjectId,
     TrajectoryData,
 )
 
@@ -86,8 +85,8 @@ class CustomThorEnv(ThorEnv):
         self.__callback = callback
         self.__load_receps = load_receps
         self.__debug = debug
-        self.__nid2id: dict[ObjectId, str] = {}
-        self.__id2nid: dict[str, ObjectId] = {}
+        self.__nid2id: dict[str, str] = {}
+        self.__id2nid: dict[str, str] = {}
         self.__id2obj: dict[str, AlfredObject] = {}
 
     @override
@@ -156,7 +155,7 @@ class CustomThorEnv(ThorEnv):
     def objects(self) -> list[AlfredObject]:
         return self.metadata["objects"]
 
-    def nid2id(self, nid: ObjectId) -> str:
+    def nid2id(self, nid: str) -> str:
         if self.__agent is None:
             raise ValueError(
                 "No agent is loaded. Please check if the trajectory data has been given."
@@ -167,7 +166,7 @@ class CustomThorEnv(ThorEnv):
                 self.__id2nid[recep["objectId"]] = nid
         return self.__nid2id[nid]
 
-    def id2nid(self, obj_id: str) -> ObjectId:
+    def id2nid(self, obj_id: str) -> str:
         if self.__agent is None:
             raise ValueError(
                 "No agent is loaded. Please check if the trajectory data has been given."
@@ -184,7 +183,7 @@ class CustomThorEnv(ThorEnv):
                 self.__id2obj[obj["objectId"]] = obj
         return self.__id2obj[id]
 
-    def get_recep_nid(self, obj_nid: ObjectId) -> str:
+    def get_recep_nid(self, obj_nid: str) -> str:
         obj_id = self.nid2id(obj_nid)
         obj = self.get_obj_from_id(obj_id)
         recep_ids = obj["receptacleObjectIds"]
@@ -315,10 +314,10 @@ def get_visible_nodes(graph: Graph) -> Graph:
     ]
 
     # find character
-    inside_of: dict[ObjectId, ObjectId] = {}
-    is_inside: dict[ObjectId, list[ObjectId]] = {}
+    inside_of: dict[str, str] = {}
+    is_inside: dict[str, list[str]] = {}
 
-    grabbed_ids: list[ObjectId] = []
+    grabbed_ids: list[str] = []
     for edge in state["edges"]:
         if edge["relation_type"] == "INSIDE":
 
@@ -332,7 +331,7 @@ def get_visible_nodes(graph: Graph) -> Graph:
             if edge["from_id"] == 0:
                 grabbed_ids.append(edge["to_id"])
 
-    character_inside_ids = inside_of[ObjectId("agent")]
+    character_inside_ids = inside_of["agent"]
     room_id = character_inside_ids
 
     object_in_room_ids = is_inside[room_id]

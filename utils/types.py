@@ -14,11 +14,9 @@ class Graph(TypedDict):
 
 Annotation = dict[str, dict[str, list[str]]]
 
-ObjectId = NewType("ObjectId", str)
-
 
 class Node(TypedDict):
-    id: ObjectId
+    id: str
     class_name: str
     category: str
     properties: list[str]
@@ -28,9 +26,9 @@ class Node(TypedDict):
 
 
 class Edge(TypedDict):
-    from_id: ObjectId
+    from_id: str
     relation_type: str
-    to_id: ObjectId
+    to_id: str
 
 
 class BoundingBox(TypedDict):
