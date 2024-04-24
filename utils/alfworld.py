@@ -7,7 +7,7 @@ import numpy as np
 from alfworld.agents.controller.oracle_astar import OracleAStarAgent
 from alfworld.env.thor_env import ThorEnv
 
-from utils.relations import Relation, relate
+from utils.relations import Relation, Relations, relate
 from utils.types import (
     AlfredBoundingBox,
     AlfredObject,
@@ -411,46 +411,46 @@ class CustomThorEnv(ThorEnv):
 
     def check_conditions(
         self,
-        conditions: list[tuple[str, str, str]] | list[Edge],
+        conditions: list[tuple[str, str, str]] | list[Relation],
         *,
         distance_threshold: float = 0.5,
     ) -> bool:
         if all(isinstance(cond, tuple) for cond in conditions):
-            conditions = list(map(edge_from_tuple, conditions))  # type: ignore
+            conditions = [
+                Relation(cond[0], Relations(cond[1]), cond[2])  # type: ignore
+                for cond in conditions
+            ]
 
-        conditions = cast(list[Edge], conditions)
+        conditions = cast(list[Relation], conditions)
         for cond in conditions:
-            from_obj = self.get_obj_from_id(cond["from_id"])
-            to_obj = self.get_obj_from_id(cond["to_id"])
+            left = self.get_obj_from_id(cond.left)
+            right = self.get_obj_from_id(cond.right)
 
-            match cond["relation_type"]:
+            match cond.relation:
                 case "is":
-                    match cond["to_id"]:
+                    match cond.right:
                         case "open":
-                            if not from_obj["isOpen"]:
+                            if not left["isOpen"]:
                                 return False
                         case "closed":
-                            if from_obj["isOpen"]:
+                            if left["isOpen"]:
                                 return False
                         case "on":
-                            if not from_obj["isToggled"]:
+                            if not left["isToggled"]:
                                 return False
                         case "off":
-                            if from_obj["isToggled"]:
+                            if left["isToggled"]:
                                 return False
                         case _:
                             raise ValueError(f"Unknown state: {cond}")
                 case "hold":
-                    if not to_obj["isPickedUp"]:
+                    if not right["isPickedUp"]:
                         return False
                 case "on":
-                    if not from_obj["isToggled"]:
+                    if not left["isToggled"]:
                         return False
                 case "close":
-                    if (
-                        get_object_distance(from_obj, to_obj)
-                        > distance_threshold
-                    ):
+                    if get_object_distance(left, right) > distance_threshold:
                         return False
                 case _:
                     raise ValueError(f"Unknown condition: {cond}")
