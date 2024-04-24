@@ -15,6 +15,7 @@ from utils.types import (
     Edge,
     Graph,
     Node,
+    ObjectId,
     TrajectoryData,
 )
 
@@ -85,8 +86,8 @@ class CustomThorEnv(ThorEnv):
         self.__callback = callback
         self.__load_receps = load_receps
         self.__debug = debug
-        self.__nid2id: dict[str, str] = {}
-        self.__id2nid: dict[str, str] = {}
+        self.__nid2id: dict[ObjectId, str] = {}
+        self.__id2nid: dict[str, ObjectId] = {}
         self.__id2obj: dict[str, AlfredObject] = {}
 
     @override
@@ -155,7 +156,7 @@ class CustomThorEnv(ThorEnv):
     def objects(self) -> list[AlfredObject]:
         return self.metadata["objects"]
 
-    def nid2id(self, nid: str) -> str:
+    def nid2id(self, nid: ObjectId) -> str:
         if self.__agent is None:
             raise ValueError(
                 "No agent is loaded. Please check if the trajectory data has been given."
@@ -166,7 +167,7 @@ class CustomThorEnv(ThorEnv):
                 self.__id2nid[recep["objectId"]] = nid
         return self.__nid2id[nid]
 
-    def id2nid(self, obj_id: str) -> str:
+    def id2nid(self, obj_id: str) -> ObjectId:
         if self.__agent is None:
             raise ValueError(
                 "No agent is loaded. Please check if the trajectory data has been given."
@@ -183,7 +184,7 @@ class CustomThorEnv(ThorEnv):
                 self.__id2obj[obj["objectId"]] = obj
         return self.__id2obj[id]
 
-    def get_recep_nid(self, obj_nid: str) -> str:
+    def get_recep_nid(self, obj_nid: ObjectId) -> str:
         obj_id = self.nid2id(obj_nid)
         obj = self.get_obj_from_id(obj_id)
         recep_ids = obj["receptacleObjectIds"]
@@ -237,17 +238,14 @@ class CustomThorEnv(ThorEnv):
         relations = self.extract_relations(
             distance_threshold=distance_threshold
         )
-        object_idx: dict[str, int] = {"agent": 0}
         nodes: list[Node] = []
         edges: list[Edge] = []
 
-        visible_objects = filter(
-            lambda elem: elem[1]["visible"], enumerate(self.objects)
-        )
-        for obj_id, obj in visible_objects:
-            object_idx[obj["objectId"]] = obj_id
+        visible_objects = filter(lambda elem: elem["visible"], self.objects)
+        for obj in visible_objects:
+            obj_nid = self.id2nid(obj["objectId"])
             node: Node = {
-                "id": obj_id,
+                "id": obj_nid,
                 "category": obj["objectType"],
                 "class_name": obj["objectType"],
                 "prefab_name": obj["name"],
@@ -259,13 +257,11 @@ class CustomThorEnv(ThorEnv):
             nodes.append(node)
 
         for rel in relations:
-            if rel.left not in object_idx or rel.right not in object_idx:
-                continue
             edges.append(
                 {
-                    "from_id": object_idx[rel.left],
+                    "from_id": self.id2nid(rel.left),
                     "relation_type": rel.relation,
-                    "to_id": object_idx[rel.right],
+                    "to_id": self.id2nid(rel.right),
                 }
             )
 
@@ -319,10 +315,10 @@ def get_visible_nodes(graph: Graph) -> Graph:
     ]
 
     # find character
-    inside_of: dict[int, int] = {}
-    is_inside: dict[int, list[int]] = {}
+    inside_of: dict[ObjectId, ObjectId] = {}
+    is_inside: dict[ObjectId, list[ObjectId]] = {}
 
-    grabbed_ids: list[int] = []
+    grabbed_ids: list[ObjectId] = []
     for edge in state["edges"]:
         if edge["relation_type"] == "INSIDE":
 
@@ -336,7 +332,7 @@ def get_visible_nodes(graph: Graph) -> Graph:
             if edge["from_id"] == 0:
                 grabbed_ids.append(edge["to_id"])
 
-    character_inside_ids = inside_of[0]
+    character_inside_ids = inside_of[ObjectId("agent")]
     room_id = character_inside_ids
 
     object_in_room_ids = is_inside[room_id]
