@@ -102,9 +102,9 @@ def relate(
 
 def relate(left: str, relation: RelationKeys, right: str) -> Relation:
     if relation == Relations.IS:
-        return StateRelation(left, States[right])
+        return StateRelation(left, States[right.upper()])
     if relation == Relations.HOLD:
         return HoldsRelation(right)
     if relation == Relations.INSIDE:
         return InsideRelation(left, right)
-    return Relation(left, Relations[relation], right)
+    return Relation(left, Relations[relation.upper()], right)

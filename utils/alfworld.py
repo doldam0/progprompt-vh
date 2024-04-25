@@ -173,16 +173,16 @@ class CustomThorEnv(ThorEnv):
                 self.__id2nid[recep["objectId"]] = nid
         return self.__nid2id[nid]
 
-    def id2nid(self, obj_id: str) -> str:
+    def id2nid(self, obj_id: str) -> str | None:
         if self.__agent is None:
             raise ValueError(
                 "No agent is loaded. Please check if the trajectory data has been given."
             )
         if obj_id not in self.__id2nid:
             for recep in self.__agent.receptacles.values():
-                self.__nid2id[recep["num_id"]] = recep["objectId"]
-                self.__id2nid[recep["objectId"]] = recep["num_id"]
-        return self.__id2nid[obj_id]
+                self.__nid2id[recep["num_id"]] = recep["object_id"]
+                self.__id2nid[recep["object_id"]] = recep["num_id"]
+        return self.__id2nid[obj_id] if obj_id in self.__id2nid else None
 
     def get_obj_from_id(self, id: str) -> AlfredObject:
         if id not in self.__id2obj:
@@ -190,7 +190,7 @@ class CustomThorEnv(ThorEnv):
                 self.__id2obj[obj["objectId"]] = obj
         return self.__id2obj[id]
 
-    def get_recep_nid(self, obj_nid: str) -> str:
+    def get_recep_nid(self, obj_nid: str) -> str | None:
         obj_id = self.nid2id(obj_nid)
         obj = self.get_obj_from_id(obj_id)
         recep_ids = obj["receptacleObjectIds"]
@@ -255,6 +255,8 @@ class CustomThorEnv(ThorEnv):
             target_objects = self.objects
         for obj in target_objects:
             obj_nid = self.id2nid(obj["objectId"])
+            if obj_nid is None:
+                continue
             node: Node = {
                 "id": obj_nid,
                 "category": obj["objectType"],
@@ -268,11 +270,15 @@ class CustomThorEnv(ThorEnv):
             nodes.append(node)
 
         for rel in relations:
+            from_id = self.id2nid(rel.left)
+            to_id = self.id2nid(rel.right)
+            if from_id is None or to_id is None:
+                continue
             edges.append(
                 {
-                    "from_id": self.id2nid(rel.left),
+                    "from_id": from_id,
                     "relation_type": rel.relation,
-                    "to_id": self.id2nid(rel.right),
+                    "to_id": to_id,
                 }
             )
 
