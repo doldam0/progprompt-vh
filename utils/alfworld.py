@@ -162,6 +162,14 @@ class CustomThorEnv(ThorEnv):
     def objects(self) -> list[AlfredObject]:
         return self.metadata["objects"]
 
+    @property
+    def agent(self) -> OracleAStarAgent:
+        if self.__agent is None:
+            raise ValueError(
+                "No agent is loaded. Please check if the trajectory data has been given."
+            )
+        return self.__agent
+
     def nid2id(self, nid: str) -> str:
         if self.__agent is None:
             raise ValueError(
