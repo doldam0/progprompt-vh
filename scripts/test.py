@@ -48,14 +48,57 @@ def main(args: TestArgument):
             set_trace()
             continue
 
-        env.render_script(cmd)
-        if not args.debug:
-            print(env.agent.feedback)
+        if cmd.startswith("\\"):
+            cmd_type, *cmd_args = cmd.split()
+            match cmd_type[1:]:
+                case "toggle":
+                    if len(cmd_args) < 2:
+                        print("Usage: \\toggle OBJECT_ID")
+                        continue
 
-        done = env.get_goal_satisfied()
-        if done:
-            print("You won!")
-            break
+                    env.toggle_object(" ".join(cmd_args[:2]))
+                    print(f"Toggled {cmd_args[1]}\n")
+                case "move":
+                    if len(cmd_args) < 6 or cmd_args[2] not in ["to", "on"]:
+                        print("Usage: \\move OBJECT_ID to X Y Z")
+                        print("Usage: \\move OBJECT_ID on OBJECT_ID")
+                        continue
+
+                    match cmd_args[2]:
+                        case "on":
+                            env.move_object(
+                                " ".join(cmd_args[:2]),
+                                on=" ".join(cmd_args[3:5]),
+                            )
+                            print(f"Moved {cmd_args[1]} on {cmd_args[4]}\n")
+                        case "to":
+                            env.move_object(
+                                " ".join(cmd_args[:2]),
+                                position=(
+                                    float(cmd_args[3]),
+                                    float(cmd_args[4]),
+                                    float(cmd_args[5]),
+                                ),
+                            )
+                            print(
+                                f"Moved {cmd_args[1]} to {cmd_args[3]} {cmd_args[4]} {cmd_args[5]}\n"
+                            )
+                case "remove":
+                    if len(cmd_args) < 2:
+                        print("Usage: \\remove OBJECT_ID")
+                        continue
+
+                    env.remove_object(" ".join(cmd_args[:2]))
+                    print(f"Removed {cmd_args[1]}\n")
+        else:
+            env.render_script(cmd)
+            if not args.debug:
+                print(env.agent.feedback)
+
+            done = env.get_goal_satisfied()
+            if done:
+                print("You won!")
+                break
 
         print("Conditions:")
         conditions = env.get_which_goal_satisfied()

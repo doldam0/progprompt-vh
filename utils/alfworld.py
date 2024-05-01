@@ -196,9 +196,12 @@ class CustomThorEnv(ThorEnv):
                 "No agent is loaded. Please check if the trajectory data has been given."
             )
         if nid not in self.__nid2id:
-            for recep in self.__agent.receptacles.values():
-                self.__nid2id[nid] = recep["objectId"]
-                self.__id2nid[recep["objectId"]] = nid
+            for obj in {
+                **self.__agent.objects,
+                **self.__agent.receptacles,
+            }.values():
+                self.__nid2id[obj["num_id"]] = obj["object_id"]
+                self.__id2nid[obj["object_id"]] = obj["num_id"]
         return self.__nid2id[nid]
 
     def id2nid(self, obj_id: str) -> str | None:
@@ -207,9 +210,12 @@ class CustomThorEnv(ThorEnv):
                 "No agent is loaded. Please check if the trajectory data has been given."
             )
         if obj_id not in self.__id2nid:
-            for recep in self.__agent.receptacles.values():
-                self.__nid2id[recep["num_id"]] = recep["object_id"]
-                self.__id2nid[recep["object_id"]] = recep["num_id"]
+            for obj in {
+                **self.__agent.objects,
+                **self.__agent.receptacles,
+            }.values():
+                self.__nid2id[obj["num_id"]] = obj["object_id"]
+                self.__id2nid[obj["object_id"]] = obj["num_id"]
         return self.__id2nid[obj_id] if obj_id in self.__id2nid else None
 
     def get_obj_from_id(self, id: str) -> AlfredObject:
@@ -348,14 +354,21 @@ class CustomThorEnv(ThorEnv):
         for s in script:
             self.__render_single_script(s)
 
-    def toggle_object(self, obj: AlfredObject | str, /, toggle: bool) -> None:
+    def toggle_object(
+        self, obj: AlfredObject | str, /, toggle: bool | None = None
+    ) -> None:
         if isinstance(obj, str):
+            if len(obj.split()) > 1:
+                obj = self.nid2id(obj)
             obj = self.get_obj_from_id(obj)
+
+        if toggle is None:
+            toggle = not obj["isToggled"]
+
         self.step(
             {
-                "action": "ToggleObjectOn",
+                "action": "ToggleObject" + ("On" if toggle else "Off"),
                 "objectId": obj["objectId"],
-                "toggleOn": toggle,
             }
         )
 
@@ -364,7 +377,7 @@ class CustomThorEnv(ThorEnv):
         self,
         obj: AlfredObject | str,
         *,
-        on: AlfredObject,
+        on: AlfredObject | str,
         relative_position: tuple[float, float, float] | None = None,
         rotation: tuple[float, float, float] | None = None,
     ) -> None: ...
@@ -384,11 +397,18 @@ class CustomThorEnv(ThorEnv):
         *,
         position: tuple[float, float, float] | None = None,
         rotation: tuple[float, float, float] | None = None,
-        on: AlfredObject | None = None,
+        on: AlfredObject | str | None = None,
         relative_position: tuple[float, float, float] | None = None,
     ) -> None:
         if isinstance(obj, str):
+            if len(obj.split()) > 1:
+                obj = self.nid2id(obj)
             obj = self.get_obj_from_id(obj)
+
+        if isinstance(on, str):
+            if len(on.split()) > 1:
+                on = self.nid2id(on)
+            on = self.get_obj_from_id(on)
 
         if position is None:
             if on is not None:
@@ -435,7 +455,12 @@ class CustomThorEnv(ThorEnv):
             }
         )
 
-    def remove_object(self, obj: AlfredObject) -> None:
+    def remove_object(self, obj: AlfredObject | str) -> None:
+        if isinstance(obj, str):
+            if len(obj.split()) > 1:
+                obj = self.nid2id(obj)
+            obj = self.get_obj_from_id(obj)
+
         self.step(
             {
                 "action": "RemoveFromScene",
@@ -512,7 +537,10 @@ class MultipleTaskThorEnv(CustomThorEnv):
 
         object_poses = list(
             {
-                e["objectName"]: e
+                f'{e["objectName"]}'
+                f'|{int(e["position"]["x"])}'
+                f'|{int(e["position"]["y"])}'
+                f'|{int(e["position"]["z"])}': e
                 for e in sum(
                     (traj["scene"]["object_poses"] for _, traj in trajectories),
                     start=[],
