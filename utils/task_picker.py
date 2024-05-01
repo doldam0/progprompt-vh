@@ -32,22 +32,18 @@ class AlfWorldTaskPicker:
         if alfworld_data_root is None:
             alfworld_data_root = ALFWORLD_DATA
         self.path = Path(alfworld_data_root)
-        self.__task_path_cache: dict[
+        self.__c: dict[
             str, dict[str, dict[str, dict[str, dict[int, list[Path]]]]]
         ] = {}
-        self.__task_path_cache_filtered: (
+        self.__c_f: (
             dict[str, dict[str, dict[str, dict[str, list[Path]]]]] | None
         ) = None
 
         self._initialize_cache()
 
     @property
-    def __cache(self):
-        return (
-            self.__task_path_cache_filtered
-            if self.__task_path_cache_filtered is not None
-            else self.__task_path_cache
-        )
+    def _cache(self):
+        return self.__c_f if self.__c_f is not None else self.__c
 
     def pick(
         self,
@@ -83,7 +79,7 @@ class AlfWorldTaskPicker:
         return traj_path, load_trajectory(traj_path)
 
     def _initialize_cache(self) -> None:
-        self.__task_path_cache.clear()
+        self.__c.clear()
 
         for path in self.path.iterdir():
             if path.is_dir():
@@ -91,89 +87,66 @@ class AlfWorldTaskPicker:
                     path.name.split("-")
                 )
                 scene_num = int(scene_num)
-                if task_type not in self.__task_path_cache:
-                    self.__task_path_cache[task_type] = {}
-                if pickable not in self.__task_path_cache[task_type]:
-                    self.__task_path_cache[task_type][pickable] = {}
-                if movable not in self.__task_path_cache[task_type][pickable]:
-                    self.__task_path_cache[task_type][pickable][movable] = {}
-                if (
-                    receptacle
-                    not in self.__task_path_cache[task_type][pickable][movable]
-                ):
-                    self.__task_path_cache[task_type][pickable][movable][
-                        receptacle
-                    ] = {}
+                if task_type not in self.__c:
+                    self.__c[task_type] = {}
+                if pickable not in self.__c[task_type]:
+                    self.__c[task_type][pickable] = {}
+                if movable not in self.__c[task_type][pickable]:
+                    self.__c[task_type][pickable][movable] = {}
+                if receptacle not in self.__c[task_type][pickable][movable]:
+                    self.__c[task_type][pickable][movable][receptacle] = {}
                 if (
                     scene_num
-                    not in self.__task_path_cache[task_type][pickable][movable][
-                        receptacle
-                    ]
+                    not in self.__c[task_type][pickable][movable][receptacle]
                 ):
-                    self.__task_path_cache[task_type][pickable][movable][
-                        receptacle
-                    ][scene_num] = []
+                    self.__c[task_type][pickable][movable][receptacle][
+                        scene_num
+                    ] = []
 
                 for trial_path in path.iterdir():
                     if trial_path.is_dir():
-                        self.__task_path_cache[task_type][pickable][movable][
-                            receptacle
-                        ][scene_num].append(trial_path)
+                        self.__c[task_type][pickable][movable][receptacle][
+                            scene_num
+                        ].append(trial_path)
 
     def _list_tasks(self) -> Iterable[str]:
-        return self.__cache.keys()
+        return self._cache.keys()
 
     def _list_pickables(self, task_name: str) -> Iterable[str]:
-        return self.__cache[task_name].keys()
+        return self._cache[task_name].keys()
 
     def _list_movables(self, task_name: str, pickable: str) -> Iterable[str]:
-        return self.__cache[task_name][pickable].keys()
+        return self._cache[task_name][pickable].keys()
 
     def _list_receptacles(
         self, task_name: str, pickable: str, movable: str
     ) -> Iterable[str]:
-        return self.__cache[task_name][pickable][movable].keys()
+        return self._cache[task_name][pickable][movable].keys()
 
     def _list_scene_numbers(
         self, task_name: str, pickable: str, movable: str, receptacle: str
     ) -> Iterable[int]:
-        return self.__task_path_cache[task_name][pickable][movable][
-            receptacle
-        ].keys()
+        return self.__c[task_name][pickable][movable][receptacle].keys()
 
     def __set_scene_num_filter(self, scene_num: int):
-        self.__task_path_cache_filtered = {}
-        for task_name, pickables in self.__task_path_cache.items():
-            self.__task_path_cache_filtered[task_name] = {}
+        self.__c_f = {}
+        for task_name, pickables in self.__c.items():
+            self.__c_f[task_name] = {}
             for pickable, movables in pickables.items():
-                self.__task_path_cache_filtered[task_name][pickable] = {}
+                self.__c_f[task_name][pickable] = {}
                 for movable, receptacles in movables.items():
-                    self.__task_path_cache_filtered[task_name][pickable][
-                        movable
-                    ] = {}
+                    self.__c_f[task_name][pickable][movable] = {}
                     for receptacle, traj_data in receptacles.items():
                         if scene_num in traj_data:
-                            self.__task_path_cache_filtered[task_name][
-                                pickable
-                            ][movable][receptacle] = traj_data[scene_num]
-                    if (
-                        len(
-                            self.__task_path_cache_filtered[task_name][
-                                pickable
-                            ][movable]
-                        )
-                        == 0
-                    ):
-                        del self.__task_path_cache_filtered[task_name][
-                            pickable
-                        ][movable]
-                if (
-                    len(self.__task_path_cache_filtered[task_name][pickable])
-                    == 0
-                ):
-                    del self.__task_path_cache_filtered[task_name][pickable]
-            if len(self.__task_path_cache_filtered[task_name]) == 0:
-                del self.__task_path_cache_filtered[task_name]
+                            self.__c_f[task_name][pickable][movable][
+                                receptacle
+                            ] = traj_data[scene_num]
+                    if len(self.__c_f[task_name][pickable][movable]) == 0:
+                        del self.__c_f[task_name][pickable][movable]
+                if len(self.__c_f[task_name][pickable]) == 0:
+                    del self.__c_f[task_name][pickable]
+            if len(self.__c_f[task_name]) == 0:
+                del self.__c_f[task_name]
 
     def _list_trials(
         self,
@@ -183,9 +156,7 @@ class AlfWorldTaskPicker:
         receptacle: str,
         scene_num: int,
     ) -> list[Path]:
-        return self.__task_path_cache[task_name][pickable][movable][receptacle][
-            scene_num
-        ]
+        return self.__c[task_name][pickable][movable][receptacle][scene_num]
 
     def pick_interactive(self) -> list[tuple[Path, TrajectoryData]]:
         ret: list[tuple[Path, TrajectoryData]] = []
