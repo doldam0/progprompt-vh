@@ -1,2 +1,3 @@
 openai==1.16.2
 alfworld[full]==0.3.3
+prompt-toolkit==3.0.43

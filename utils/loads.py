@@ -28,6 +28,11 @@ def load_annotations(filename: Union[str, Path]) -> list[Annotation]:
         return list(json_loadlines(f, astype=Annotation))
 
 
+def load_trajectory(path: str | Path) -> TrajectoryData:
+    with open(path, "r") as f:
+        return json.load(f)
+
+
 def load_trajectories(
     path: Union[str, Path]
 ) -> list[tuple[str, TrajectoryData]]:

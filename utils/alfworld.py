@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import os.path as osp
+from argparse import Namespace
+from pathlib import Path
 from typing import Any, Callable, cast, overload, override
 
+import alfworld.agents
 import alfworld.gen.constants as constants
 import numpy as np
 from alfworld.agents.controller.oracle_astar import OracleAStarAgent
+from alfworld.env.tasks import get_task
 from alfworld.env.thor_env import ThorEnv
+from alfworld.gen.constants import (
+    RECORD_SMOOTHING_FACTOR,
+    RENDER_CLASS_IMAGE,
+    RENDER_OBJECT_IMAGE,
+)
 
 from utils.relations import Relation, Relations, relate
 from utils.types import (
@@ -16,7 +26,6 @@ from utils.types import (
     Graph,
     Node,
     TrajectoryData,
-    edge_from_tuple,
 )
 
 
@@ -102,6 +111,7 @@ class CustomThorEnv(ThorEnv):
         trajectory_root: str,
         trajectory_data: TrajectoryData,
         *,
+        reward_config_path: str | Path | None = None,
         grid_size=constants.AGENT_STEP_SIZE / constants.RECORD_SMOOTHING_FACTOR,
         camera_y=constants.CAMERA_HEIGHT_OFFSET,
         render_image=constants.RENDER_IMAGE,
@@ -141,6 +151,16 @@ class CustomThorEnv(ThorEnv):
             load_receps=self.__load_receps,
             debug=self.__debug,
         )
+
+        if reward_config_path is None:
+            reward_config_path = osp.join(
+                next(iter(alfworld.agents.__path__)),
+                "config",
+                "rewards.json",
+            )
+        self._args = Namespace()
+        self._args.reward_config = reward_config_path
+        self.set_task(trajectory_data, self._args, reward_type=reward_type)
 
     @override
     def step(self, action, smooth_nav=False):
@@ -469,6 +489,95 @@ class CustomThorEnv(ThorEnv):
                 case _:
                     raise ValueError(f"Unknown condition: {cond}")
         return True
+
+
+class MultipleTaskThorEnv(CustomThorEnv):
+    @override
+    def reset(
+        self,
+        trajectories: list[tuple[Path, TrajectoryData]],
+        *,
+        reward_config_path: str | Path | None = None,
+        grid_size=constants.AGENT_STEP_SIZE / constants.RECORD_SMOOTHING_FACTOR,
+        camera_y=constants.CAMERA_HEIGHT_OFFSET,
+        render_image=constants.RENDER_IMAGE,
+        render_depth_image=constants.RENDER_DEPTH_IMAGE,
+        render_class_image=constants.RENDER_CLASS_IMAGE,
+        render_object_image=constants.RENDER_OBJECT_IMAGE,
+        visibility_distance=constants.VISIBILITY_DISTANCE,
+        reward_type="dense",
+    ):
+        path, traj_data = trajectories[0]
+        root = str(path.parent)
+
+        object_poses = list(
+            {
+                e["objectName"]: e
+                for e in sum(
+                    (traj["scene"]["object_poses"] for _, traj in trajectories),
+                    start=[],
+                )
+            }.values()
+        )
+        object_toggles = list(
+            {
+                e["objectType"]: e
+                for e in sum(
+                    (
+                        traj["scene"]["object_toggles"]
+                        for _, traj in trajectories
+                    ),
+                    start=[],
+                )
+            }.values()
+        )
+
+        traj_data["scene"]["object_poses"] = object_poses
+        traj_data["scene"]["object_toggles"] = object_toggles
+
+        super().reset(
+            root,
+            traj_data,
+            reward_config_path=reward_config_path,
+            grid_size=grid_size,
+            camera_y=camera_y,
+            render_image=render_image,
+            render_depth_image=render_depth_image,
+            render_class_image=render_class_image,
+            render_object_image=render_object_image,
+            visibility_distance=visibility_distance,
+            reward_type=reward_type,
+        )
+
+        self._tasks = [
+            (
+                traj_root,
+                get_task(
+                    traj_data["task_type"],
+                    traj_data,
+                    self,
+                    self._args,
+                    reward_type=reward_type,
+                ),
+            )
+            for traj_root, traj_data in trajectories
+        ]
+
+    @override
+    def get_goal_satisfied(self):
+        if self._tasks is None:
+            raise ValueError("No tasks have been loaded yet")
+        return all(
+            task.goal_satisfied(self.last_event) for _, task in self._tasks
+        )
+
+    def get_which_goal_satisfied(self):
+        if self._tasks is None:
+            raise ValueError("No tasks have been loaded yet")
+        return [
+            (path, task.goal_satisfied(self.last_event))
+            for path, task in self._tasks
+        ]
 
 
 def get_visible_nodes(graph: Graph) -> Graph:
