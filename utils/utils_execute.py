@@ -14,19 +14,17 @@ import os
 import random
 import re
 from io import TextIOWrapper
+from pathlib import Path
 from typing import List, Optional, Tuple, Union, cast
 
 import numpy as np
 from openai import OpenAI
 from openai.types.chat.chat_completion import ChatCompletion
 
-from utils.alfworld import CustomThorEnv, get_visible_nodes
-from utils.arguments import RunEvalArguments
+from utils.alfworld import ACTIONS, CustomThorEnv, MultipleTaskThorEnv
 from utils.types import Graph, TrajectoryData
-from utils.utils_aug_env import (
-    add_additional_obj_states,
-    get_obj_ids_for_adding_states,
-)
+from utils.utils_aug_env import (add_additional_obj_states,
+                                 get_obj_ids_for_adding_states)
 
 
 class LM:
@@ -149,10 +147,10 @@ current_state_prompt = get_current_state_prompt()
 
 
 def run_execution(
-    args: RunEvalArguments,
-    env: CustomThorEnv,
+    args,
+    env: MultipleTaskThorEnv,
     model: LM,
-    trajectories: list[tuple[str, TrajectoryData]],
+    trajectories: list[tuple[Path, TrajectoryData]],
     tasks: list[str],
     gen_plan: list[str],
     log_file: TextIOWrapper,
@@ -163,13 +161,24 @@ def run_execution(
 
     task_to_plan = {task: plan for task, plan in zip(tasks, gen_plan)}
 
-    for traj_root, traj_data in trajectories:
-        ## initialize and set up enviroenment: visual + graph environment ##
-        env.reset(traj_root, traj_data)
-        # TODO: Check if this is needed
-        # env.add_character("Chars/Male2", initial_room="kitchen")
+    ## initialize and set up enviroenment: visual + graph environment ##
+    env.reset(trajectories)
+    # TODO: Check if this is needed
+    # env.add_character("Chars/Male2", initial_room="kitchen")
 
-        task_name = traj_data["task_type"]
+    for path, traj_data in (trajectories * 5):
+        if any(
+            p == path and condition == True
+            for p, condition in env.get_which_goal_satisfied()
+        ):
+            continue
+
+        final_state = {
+            "nodes": [],
+            "edges": [],
+        }
+
+        task_name = traj_data["turk_annotations"]["anns"][0]["task_desc"]
         if task_name not in task_to_plan:
             continue
         plan = task_to_plan[task_name]
@@ -191,18 +200,18 @@ def run_execution(
         ]
         # some actions might not execute in the visual simulation, but they will in evolving graphs
         images: list[np.ndarray] = []
-        im = env.camera_image([cc - 5], image_width=300, image_height=300)
-        images.append(im[0])
+        im = env.camera_image()
+        images.append(im)
         # s, obj = comm.get_visible_objects(cc-6)
         obj_ids_for_adding_states = get_obj_ids_for_adding_states(graph)
         nodes_with_additional_states = {}
 
-        partial_graph = get_visible_nodes(graph)
+        partial_graph = env.environment_graph(only_visible=True)
 
         obj_ids_close = [
             n["to_id"]
             for n in graph["edges"]
-            if n["from_id"] == agent and n["relation_type"] == "CLOSE"
+            if n["from_id"] == "agent" and n["relation_type"] == "CLOSE"
         ]
         obj = [
             node["class_name"]
@@ -338,92 +347,65 @@ def run_execution(
                 total_steps += 1
 
                 ## parse next action
-                action = action.split(")")[0]
+                action = action.lower().split(")")[0]
                 action = re.findall(r"\b[a-z]+", action)
 
                 if len(action) == 3 and "put" in action[0]:  # 2 objs action
-                    obj_id1 = [
+                    obj_nid1 = [
                         node["id"]
                         for node in graph["nodes"]
-                        if node["class_name"] == action[1]
+                        if action[1] in node["id"]
                         and node["id"] in agent_has_objid
                     ]
-                    obj_id2 = [
+                    obj_nid2 = [
                         node["id"]
                         for node in graph["nodes"]
-                        if node["class_name"] == action[2]
+                        if action[2] in node["id"]
                     ]
-                    if len(obj_id1) == 0:
+                    if len(obj_nid1) == 0:
                         step += 1
                         log_file.write("obj not in hand\n")
                         continue
-                    if len(obj_id1) == 1:
-                        id1 = obj_id1[0]
+                    if len(obj_nid1) == 1:
+                        nid1 = obj_nid1[0]
                     else:
-                        id1 = random.choice(obj_id1)
+                        nid1 = random.choice(obj_nid1)
 
-                    if len(obj_id2) == 0:
+                    if len(obj_nid2) == 0:
                         step += 1
                         log_file.write("obj not found\n")
                         continue
-                    elif len(obj_id2) == 1:
-                        id2 = obj_id2[0]
-                    elif found_id in obj_id2:
-                        id2 = found_id
+                    elif len(obj_nid2) == 1:
+                        nid2 = obj_nid2[0]
                     else:
-                        id2 = random.choice(obj_id2)
-                    script_instruction = (
-                        "<char0> [{}] <{}> ({}) <{}> ({})".format(
-                            action[0], action[1], id1, action[2], id2
-                        )
-                    )
-                elif len(action) == 2 and action[0] not in [
-                    "find",
-                    "walk",
-                ]:  # 1 obj action
-                    obj_id1 = [
-                        node["id"]
-                        for node in graph["nodes"]
-                        if node["class_name"] == action[1]
-                    ]
-                    if len(obj_id1) == 1:
-                        id1 = obj_id1[0]
-                    elif found_id in obj_id1:
-                        id1 = found_id
-                    elif len(obj_id1) == 0:
-                        step += 1
-                        log_file.write("obj not found\n")
-                        continue
-                    else:
-                        id1 = random.choice(obj_id1)
-                    script_instruction = "<char0> [{}] <{}> ({})".format(
-                        action[0], action[1], id1
-                    )
-                elif len(action) == 2:  # walk or find action
-                    obj_id1 = [
-                        node["id"]
-                        for node in graph["nodes"]
-                        if node["class_name"] == action[1]
-                    ]
-                    if len(obj_id1) == 0:
-                        step += 1
-                        log_file.write("obj not found\n")
-                        continue
-                    found_id = random.choice(obj_id1)
-                    script_instruction = "<char0> [{}] <{}> ({})".format(
-                        action[0], action[1], found_id
-                    )
-                elif len(action) == 1:  # 0 object action
-                    script_instruction = "<char0> [{}]".format(action[0])
+                        nid2 = random.choice(obj_nid2)
+                    script_instruction = ACTIONS[action[0]].format(nid1, nid2)
                 else:
-                    log_file.write("bad action\n")
-                    continue
+                    try:
+                        nids: list[str] = []
+                        err = False
+                        for act in action[1:]:
+                            ids = [
+                                node["id"]
+                                for node in graph["nodes"]
+                                if act in node["id"]
+                            ]
+                            if len(ids) == 0:
+                                err = True
+                                break
+                            nids.append(random.choice(ids))
+                        if err:
+                            step += 1
+                            log_file.write("obj not found\n")
+                            continue
+                        script_instruction = ACTIONS[action[0]].format(*nids)
+                    except (KeyError, IndexError) as e:
+                        log_file.write(f"bad action: {e}\n")
+                        continue
 
                 ## execute next action in both envs: visual and graph
                 log_file.write(f"{script_instruction}\n")
-                env.render_script(script_instruction)
-                if not env.get_goal_satisfied():
-                    continue
+                exec_num = env.render_script(script_instruction)
                 """
                 script = script_instruction[7:]
                 try:
@@ -436,41 +418,21 @@ def run_execution(
                 """
 
                 # count execution if action executes succesfully in graph env
-                executable_steps += 1
+                executable_steps += exec_num
                 # _, graph = comm.environment_graph()
                 final_state = env.environment_graph()
                 graph = final_state
-                agent = next(
-                    n["id"]
-                    for n in graph["nodes"]
-                    if n["class_name"] == "character"
-                )
-                partial_graph = get_visible_nodes(final_state)
+                partial_graph = env.environment_graph(only_visible=True)
                 script_instruction = " ".join(
                     re.findall(r"\b[a-z]+", script_instruction)[1:]
                 )
                 step += 1
 
                 # get new state info
-                agent = next(
-                    n["id"]
-                    for n in graph["nodes"]
-                    if n["class_name"] == "character"
-                )
-                agent_in_roomid = next(
-                    n["to_id"]
-                    for n in graph["edges"]
-                    if n["from_id"] == agent and n["relation_type"] == "INSIDE"
-                )
-                agent_in_room = next(
-                    n["class_name"]
-                    for n in graph["nodes"]
-                    if n["id"] == agent_in_roomid
-                )
                 agent_has_objid = [
                     n["to_id"]
                     for n in graph["edges"]
-                    if n["from_id"] == agent and "HOLD" in n["relation_type"]
+                    if n["from_id"] == "agent" and "HOLD" in n["relation_type"]
                 ]
                 agent_has_obj = [
                     n["class_name"]
@@ -479,24 +441,13 @@ def run_execution(
                 ]
 
                 # Here you can get an observation, for instance
-                if (
-                    "grab" in script_instruction
-                    or "open" in script_instruction
-                    or "close" in script_instruction
-                ):
-                    s, im = env.camera_image(
-                        [cc - 5], image_width=300, image_height=300
-                    )
-                else:
-                    s, im = env.camera_image(
-                        [cc - 6], image_width=300, image_height=300
-                    )
-                images.append(im[0])
+                im = env.camera_image()
+                images.append(im)
 
                 obj_ids_close = [
                     n["to_id"]
                     for n in graph["edges"]
-                    if n["from_id"] == agent and n["relation_type"] == "CLOSE"
+                    if n["from_id"] == "agent" and n["relation_type"] == "CLOSE"
                 ]
                 obj = [
                     node["class_name"]
@@ -508,7 +459,6 @@ def run_execution(
                         (node["id"], node["class_name"])
                         for node in partial_graph["nodes"]
                         if node["id"] in obj_ids_close
-                        and node["class_name"] != agent_in_room
                     ]
                 )
                 nodes_with_additional_states = add_additional_obj_states(

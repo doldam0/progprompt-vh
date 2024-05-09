@@ -1,3 +1,4 @@
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -28,7 +29,11 @@ class AlfWorldTaskPicker:
         }
     )
 
-    def __init__(self, alfworld_data_root: str | Path | None = None):
+    def __init__(
+        self,
+        alfworld_data_root: str | Path | None = None,
+        remember: bool = False,
+    ):
         if alfworld_data_root is None:
             alfworld_data_root = ALFWORLD_DATA
         self.path = Path(alfworld_data_root)
@@ -40,6 +45,9 @@ class AlfWorldTaskPicker:
         ) = None
 
         self._initialize_cache()
+
+        self.__remember = remember
+        self.__selected_tasks = set()
 
     @property
     def _cache(self):
@@ -229,5 +237,49 @@ class AlfWorldTaskPicker:
             ret.append((traj_path, load_trajectory(traj_path)))
 
             i += 1
+
+        return ret
+
+    def pick_random(self, num_tasks: int) -> list[tuple[Path, TrajectoryData]]:
+        ret: list[tuple[Path, TrajectoryData]] = []
+        if not self.__remember:
+            self.__selected_tasks = set()
+
+        scene_num: int | None = None
+        for _ in range(num_tasks):
+            tasks = self._list_tasks()
+            remained_tasks = list(set(tasks) - self.__selected_tasks)
+            if len(remained_tasks) == 0:
+                break
+            task_type = random.choice(remained_tasks)
+            self.__selected_tasks.add(task_type)
+
+            pickables = self._list_pickables(task_type)
+            pickable = random.choice(list(pickables))
+
+            movables = self._list_movables(task_type, pickable)
+            movable = random.choice(list(movables))
+
+            receptacles = self._list_receptacles(task_type, pickable, movable)
+            receptacle = random.choice(list(receptacles))
+
+            if scene_num is None:
+                scene_nums = self._list_scene_numbers(
+                    task_type, pickable, movable, receptacle
+                )
+                scene_num_tmp = random.choice(list(scene_nums))
+                self.__set_scene_num_filter(scene_num_tmp)
+                scene_num = scene_num_tmp
+
+            task_path = (
+                self.path
+                / f"{task_type}-{pickable}-{movable}-{receptacle}-{scene_num}"
+            )
+            trial = self._list_trials(
+                task_type, pickable, movable, receptacle, scene_num
+            )[0]
+
+            traj_path = task_path / trial.name / "traj_data.json"
+            ret.append((traj_path, load_trajectory(traj_path)))
 
         return ret

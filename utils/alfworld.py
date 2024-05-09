@@ -28,6 +28,19 @@ from utils.types import (
     TrajectoryData,
 )
 
+ACTIONS = {
+    "goto": "go to {0}",
+    "take": "take {0} from {1}",
+    "put": "put {0} on {1}",
+    "open": "open {0}",
+    "close": "close {0}",
+    "toggle": "toggle {0}",
+    "heat": "heat {0} with {1}",
+    "cool": "cool {0} with {1}",
+    "clean": "clean {0} with {1}",
+    "inventory": "inventory",
+}
+
 
 def bbox_from_alfred(alfred_bbox: AlfredBoundingBox) -> BoundingBox:
     top_left = alfred_bbox["objectBoundsCorners"][0]
@@ -65,10 +78,18 @@ def get_object_x_distance(obj1: AlfredObject, obj2: AlfredObject) -> float:
     return abs(obj1["position"]["x"] - obj2["position"]["x"])
 
 
+def get_distance(
+    p1: tuple[float, float, float], p2: tuple[float, float, float]
+) -> float:
+    return (
+        (p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2 + (p1[2] - p2[2]) ** 2
+    ) ** 0.5
+
+
 def get_object_distance(obj1: AlfredObject, obj2: AlfredObject) -> float:
     x1, y1, z1 = get_object_position(obj1)
     x2, y2, z2 = get_object_position(obj2)
-    return ((x1 - x2) ** 2 + (y1 - y2) ** 2 + (z1 - z2) ** 2) ** 0.5
+    return get_distance((x1, y1, z1), (x2, y2, z2))
 
 
 class CustomThorEnv(ThorEnv):
@@ -190,6 +211,10 @@ class CustomThorEnv(ThorEnv):
             )
         return self.__agent
 
+    def get_agent_position(self) -> tuple[float, float, float]:
+        pos = self.metadata["agent"]["position"]
+        return pos["x"], pos["y"], pos["z"]
+
     def nid2id(self, nid: str) -> str:
         if self.__agent is None:
             raise ValueError(
@@ -234,34 +259,49 @@ class CustomThorEnv(ThorEnv):
         return self.id2nid(recep["objectId"])
 
     def extract_relations(
-        self, *, distance_threshold: float = 0.5
+        self, *, only_visible: bool = False, distance_threshold: float = 0.5
     ) -> list[Relation]:
         if self.last_event is None:
             return []
 
         relations: list[Relation] = []
 
-        visible_objects = list(filter(lambda obj: obj["visible"], self.objects))
+        if only_visible:
+            target_objects = list(
+                filter(lambda obj: obj["visible"], self.objects)
+            )
+        else:
+            target_objects = self.objects
 
-        for i, obj in enumerate(visible_objects):
+        for i, obj in enumerate(target_objects):
             if obj["receptacle"] and obj["receptacleObjectIds"] is not None:
                 for receptacle in obj["receptacleObjectIds"]:
                     rel = relate(receptacle, "on", obj["objectId"])
                     relations.append(rel)
+
             if obj["pickupable"] and obj["isPickedUp"]:
                 rel = relate("agent", "hold", obj["objectId"])
                 relations.append(rel)
+
             if obj["toggleable"]:
                 rel = relate(
                     obj["objectId"], "is", "on" if obj["isToggled"] else "off"
                 )
                 relations.append(rel)
+
             if obj["openable"]:
                 rel = relate(
                     obj["objectId"], "is", "open" if obj["isOpen"] else "closed"
                 )
                 relations.append(rel)
-            for target in visible_objects[(i + 1) :]:
+
+            obj_pos = get_object_position(obj)
+            agent_pos = self.get_agent_position()
+            if get_distance(obj_pos, agent_pos) < distance_threshold:
+                rel = relate("agent", "close", obj["objectId"])
+                relations.append(rel)
+
+            for target in target_objects[(i + 1) :]:
                 if (
                     abs(obj["position"]["x"] - target["position"]["x"])
                     > distance_threshold
@@ -278,7 +318,7 @@ class CustomThorEnv(ThorEnv):
         self, *, only_visible: bool = True, distance_threshold: float = 0.5
     ) -> Graph:
         relations = self.extract_relations(
-            distance_threshold=distance_threshold
+            only_visible=only_visible, distance_threshold=distance_threshold
         )
         nodes: list[Node] = []
         edges: list[Edge] = []
@@ -322,37 +362,23 @@ class CustomThorEnv(ThorEnv):
         }
 
     def camera_count(self) -> int:
-        return len(self.metadata["cameraHorizons"])
+        return 1
 
-    def camera_image(
-        self,
-        idx: int | list[int],
-        image_width: int = 300,
-        image_height: int = 300,
-    ) -> list[np.ndarray]:
-        if isinstance(idx, int):
-            idx = [idx]
-        return [
-            self.event().cv2img(
-                self.metadata["cameraHorizons"][i]["cameraHorizon"],
-                width=image_width,
-                height=image_height,
-            )
-            for i in idx
-        ]
+    def camera_image(self) -> np.ndarray:
+        return self.event().cv2img
 
-    def __render_single_script(self, script: str) -> None:
+    def __render_single_script(self, script: str) -> bool:
         if self.__agent is None:
             raise ValueError(
                 "No agent is loaded. Please check if the trajectory data has been given."
             )
-        return self.__agent.step(script)
+        self.__agent.step(script)
+        return self.__agent.feedback != "Nothing happens."
 
-    def render_script(self, script: list[str] | str) -> None:
+    def render_script(self, script: list[str] | str) -> int:
         if isinstance(script, str):
             script = [script]
-        for s in script:
-            self.__render_single_script(s)
+        return sum(int(self.__render_single_script(s)) for s in script)
 
     def toggle_object(
         self, obj: AlfredObject | str, /, toggle: bool | None = None
@@ -606,77 +632,3 @@ class MultipleTaskThorEnv(CustomThorEnv):
             (path, task.goal_satisfied(self.last_event))
             for path, task in self._tasks
         ]
-
-
-def get_visible_nodes(graph: Graph) -> Graph:
-    # Obtains partial observation from the perspective of agent_id
-    # That is, objects inside the same room as agent_id and not inside closed containers
-    # NOTE: Assumption is that the graph has an inside transition that is not transitive
-    state = graph
-    id2node = {node["id"]: node for node in state["nodes"]}
-    rooms_ids = [
-        node["id"] for node in graph["nodes"] if node["category"] == "Rooms"
-    ]
-
-    # find character
-    inside_of: dict[str, str] = {}
-    is_inside: dict[str, list[str]] = {}
-
-    grabbed_ids: list[str] = []
-    for edge in state["edges"]:
-        if edge["relation_type"] == "INSIDE":
-
-            if edge["to_id"] not in is_inside.keys():
-                is_inside[edge["to_id"]] = []
-
-            is_inside[edge["to_id"]].append(edge["from_id"])
-            inside_of[edge["from_id"]] = edge["to_id"]
-
-        elif "HOLDS" in edge["relation_type"]:
-            if edge["from_id"] == 0:
-                grabbed_ids.append(edge["to_id"])
-
-    character_inside_ids = inside_of["agent"]
-    room_id = character_inside_ids
-
-    object_in_room_ids = is_inside[room_id]
-
-    # Some object are not directly in room, but we want to add them
-    curr_objects = list(object_in_room_ids)
-    while len(curr_objects) > 0:
-        objects_inside = []
-        for curr_obj_id in curr_objects:
-            new_inside = (
-                is_inside[curr_obj_id]
-                if curr_obj_id in is_inside.keys()
-                else []
-            )
-            objects_inside += new_inside
-
-        object_in_room_ids += list(objects_inside)
-        curr_objects = list(objects_inside)
-
-    # Only objects that are inside the room and not inside something closed
-    # TODO: this can be probably speed up if we can ensure that all objects are either closed or open
-    object_hidden = (
-        lambda ido: inside_of[ido] not in rooms_ids
-        and "OPEN" not in id2node[inside_of[ido]]["states"]
-    )
-    observable_object_ids = [
-        object_id
-        for object_id in object_in_room_ids
-        if not object_hidden(object_id)
-    ] + rooms_ids
-    observable_object_ids += grabbed_ids
-
-    partilly_observable_state: Graph = {
-        "edges": [
-            edge
-            for edge in state["edges"]
-            if edge["from_id"] in observable_object_ids
-            and edge["to_id"] in observable_object_ids
-        ],
-        "nodes": [id2node[id_node] for id_node in observable_object_ids],
-    }
-
-    return partilly_observable_state

@@ -27,13 +27,14 @@ from typing import Dict, List, TypedDict
 
 import openai
 
-from utils.alfworld import CustomThorEnv
+from utils.alfworld import CustomThorEnv, MultipleTaskThorEnv
 from utils.loads import (
     load_annotations,
     load_environment_states,
     load_plan,
     load_trajectories,
 )
+from utils.task_picker import AlfWorldTaskPicker
 from utils.utils_execute import *
 
 
@@ -98,7 +99,7 @@ def parse_args() -> RunEvalArguments:
     ## check token length limit for models to set prompt size:
     ## https://platform.openai.com/docs/models
     parser.add_argument(
-        "--prompt-num-examples", type=int, default=3, choices=range(1, 7)
+        "--prompt-num-examples", type=int, default=2, choices=range(1, 3)
     )
     parser.add_argument(
         "--prompt-task-examples-ablation",
@@ -255,22 +256,22 @@ def eval(
 def planner_executer(args: RunEvalArguments):
 
     # initialize env
-    env = CustomThorEnv(
+    env = MultipleTaskThorEnv(
         x_display=args.display,
         player_screen_height=args.screen_height,
         player_screen_width=args.screen_width,
     )
 
-    trajs = load_trajectories(args.data_root)
+    task_picker = AlfWorldTaskPicker(args.data_root, remember=True)
+    trajs = task_picker.pick_random(3)
 
-    # prompt example environment is set to env_id 0
-    env.reset(*trajs[0])
+    env.reset(trajs)
 
-    env_graph = env.environment_graph()
-    obj = list(set([node["class_name"] for node in env_graph["nodes"]]))
+    env_graph = env.environment_graph(only_visible=False)
+    obj = list(set([node["id"].split()[0] for node in env_graph["nodes"]]))
 
     # define available actions and append avaailable objects from the env
-    prompt = f"from actions import turnright, turnleft, walkforward, walktowards <obj>, walk <obj>, run <obj>, grab <obj>, switchon <obj>, switchoff <obj>, open <obj>, close <obj>, lookat <obj>, sit <obj>, standup, find <obj>, turnto <obj>, drink <obj>, pointat <obj>, watch <obj>, putin <obj> <obj>, putback <obj> <obj>"
+    prompt = f"from actions import goto <obj>, take <obj> from <obj>, put <obj> on <obj>, open <obj>, close <obj>, toggle <obj>, heat <obj> with <obj>, cool <obj> with <obj>, clean <obj> with <obj>, inventory"
     prompt += f"\n\nobjects = {obj}"
 
     # load train split for task examples
@@ -287,13 +288,8 @@ def planner_executer(args: RunEvalArguments):
     # default examples from the paper
     if args.prompt_task_examples == "default":
         default_examples = [
-            "put_the_wine_glass_in_the_kitchen_cabinet",
-            "throw_away_the_lime",
-            "wash_mug",
-            "refrigerate_the_salmon",
-            "bring_me_some_fruit",
-            "wash_clothes",
-            "put_apple_in_fridge",
+            "look_at_obj_in_light",
+            "pick_and_place_simple",
         ]
         for i in range(args.prompt_num_examples):
             prompt += "\n\n" + prompt_egs[default_examples[i]]
@@ -345,17 +341,14 @@ def planner_executer(args: RunEvalArguments):
     test_tasks: List[str] = []
 
     # evaluate in given unseen env
-    env.reset(*trajs[0])
-    graph = env.environment_graph()
+    env.reset(trajs)
+    graph = env.environment_graph(only_visible=False)
     obj = list(set([node["class_name"] for node in graph["nodes"]]))
     prompt += f"\n\n\nobjects = {obj}"
 
     # evaluation tasks in given unseen env
     test_tasks = [
-        list(annotation.keys())[0]
-        for annotation in load_annotations(
-            f"{args.progprompt_path}/data/new_env/{args.test_set}_annotated.json"
-        )
+        traj["turk_annotations"]["anns"][0]["task_desc"] for _, traj in trajs
     ]
     log_file.write(
         f"\n----Test set tasks----\n{test_tasks}\nTotal: {len(test_tasks)} tasks\n"
