@@ -23,8 +23,10 @@ from openai.types.chat.chat_completion import ChatCompletion
 
 from utils.alfworld import ACTIONS, CustomThorEnv, MultipleTaskThorEnv
 from utils.types import Graph, TrajectoryData
-from utils.utils_aug_env import (add_additional_obj_states,
-                                 get_obj_ids_for_adding_states)
+from utils.utils_aug_env import (
+    add_additional_obj_states,
+    get_obj_ids_for_adding_states,
+)
 
 
 class LM:
@@ -154,9 +156,7 @@ def run_execution(
     tasks: list[str],
     gen_plan: list[str],
     log_file: TextIOWrapper,
-) -> Tuple[List[Graph], List[Graph], List[float]]:
-    final_states: List[Graph] = []
-    initial_states: List[Graph] = []
+) -> Tuple[Graph, Graph, List[float]]:
     exec_per_task: List[float] = []
 
     task_to_plan = {task: plan for task, plan in zip(tasks, gen_plan)}
@@ -166,17 +166,18 @@ def run_execution(
     # TODO: Check if this is needed
     # env.add_character("Chars/Male2", initial_room="kitchen")
 
-    for path, traj_data in (trajectories * 5):
+    initial_state = env.environment_graph()
+    final_state: Graph = {
+        "nodes": [],
+        "edges": [],
+    }
+
+    for path, traj_data in trajectories * 5:
         if any(
             p == path and condition == True
             for p, condition in env.get_which_goal_satisfied()
         ):
             continue
-
-        final_state = {
-            "nodes": [],
-            "edges": [],
-        }
 
         task_name = traj_data["turk_annotations"]["anns"][0]["task_desc"]
         if task_name not in task_to_plan:
@@ -185,7 +186,6 @@ def run_execution(
 
         graph = env.environment_graph()
         cc = env.camera_count()
-        initial_states.append(graph)
 
         ## get agent's initial state ##
         agent_has_objid = [
@@ -518,6 +518,5 @@ def run_execution(
                 ]
 
         # get final state for eval
-        final_states.append(cast(Graph, final_state))
         exec_per_task.append(executable_steps / total_steps)
-    return final_states, initial_states, exec_per_task
+    return final_state, initial_state, exec_per_task

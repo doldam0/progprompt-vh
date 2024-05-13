@@ -57,15 +57,15 @@ class AlfWorldTaskPicker:
         self,
         task_type: str,
         *args: str | None,
-        task_num: int | None = None,
+        room_num: int | None = None,
         trial_num: int = 0,
     ) -> tuple[Path, TrajectoryData]:
         if len(args) < 3:
             args += (None,) * (3 - len(args))
 
         top_dirname = f"{task_type.lower().replace(' ', '_')}-{args[0]}-{args[1]}-{args[2]}"
-        if task_num is not None:
-            top_dirname += f"-{task_num}"
+        if room_num is not None:
+            top_dirname += f"-{room_num}"
         else:
             for path in self.path.iterdir():
                 if path.is_dir() and path.name.startswith(top_dirname):

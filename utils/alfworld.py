@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os.path as osp
+import sys
 from argparse import Namespace
 from pathlib import Path
 from typing import Any, Callable, cast, overload, override
@@ -11,11 +12,6 @@ import numpy as np
 from alfworld.agents.controller.oracle_astar import OracleAStarAgent
 from alfworld.env.tasks import get_task
 from alfworld.env.thor_env import ThorEnv
-from alfworld.gen.constants import (
-    RECORD_SMOOTHING_FACTOR,
-    RENDER_CLASS_IMAGE,
-    RENDER_OBJECT_IMAGE,
-)
 
 from utils.relations import Relation, Relations, relate
 from utils.types import (
@@ -625,10 +621,60 @@ class MultipleTaskThorEnv(CustomThorEnv):
             task.goal_satisfied(self.last_event) for _, task in self._tasks
         )
 
-    def get_which_goal_satisfied(self):
+    @overload
+    def get_which_goal_satisfied(self, task_id: str) -> bool: ...
+
+    @overload
+    def get_which_goal_satisfied(self) -> list[tuple[Path, bool]]: ...
+
+    def get_which_goal_satisfied(
+        self, task_id: str | None = None
+    ) -> bool | list[tuple[Path, bool]]:
         if self._tasks is None:
             raise ValueError("No tasks have been loaded yet")
+        if task_id is not None:
+            for _, task in self._tasks:
+                if task_id == task.traj["task_id"]:
+                    return task.goal_satisfied(self.last_event)
         return [
             (path, task.goal_satisfied(self.last_event))
             for path, task in self._tasks
         ]
+
+
+def combine_graphs(graphs: Graph | list[Graph], *others: Graph) -> Graph:
+    if not isinstance(graphs, list):
+        graphs = [graphs]
+    graphs.extend(others)
+
+    nodes: dict[str, Node] = {}
+    edges: dict[str, Edge] = {}
+
+    for graph in graphs:
+        for node in graph["nodes"]:
+            nodes[node["id"]] = node
+        for edge in graph["edges"]:
+            edges[f"{edge['from_id']}_{edge['to_id']}"] = edge
+
+    return {
+        "nodes": list(nodes.values()),
+        "edges": list(edges.values()),
+    }
+
+
+def validate_graph(graph: Graph) -> Graph:
+    nodes = graph["nodes"]
+    edges = graph["edges"]
+
+    return {
+        "nodes": nodes,
+        "edges": [
+            {
+                "from_id": edge["from_id"],
+                "relation_type": edge["relation_type"],
+                "to_id": edge["to_id"],
+            }
+            for edge in edges
+            if edge["from_id"] in nodes and edge["to_id"] in nodes
+        ],
+    }
