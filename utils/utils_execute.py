@@ -23,10 +23,8 @@ from openai.types.chat.chat_completion import ChatCompletion
 
 from utils.alfworld import ACTIONS, CustomThorEnv, MultipleTaskThorEnv
 from utils.types import Graph, TrajectoryData
-from utils.utils_aug_env import (
-    add_additional_obj_states,
-    get_obj_ids_for_adding_states,
-)
+from utils.utils_aug_env import (add_additional_obj_states,
+                                 get_obj_ids_for_adding_states)
 
 
 class LM:
@@ -167,10 +165,7 @@ def run_execution(
     # env.add_character("Chars/Male2", initial_room="kitchen")
 
     initial_state = env.environment_graph()
-    final_state: Graph = {
-        "nodes": [],
-        "edges": [],
-    }
+    final_state = initial_state.copy()
 
     for path, traj_data in trajectories * 5:
         if any(

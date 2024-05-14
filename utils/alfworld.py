@@ -324,7 +324,7 @@ class CustomThorEnv(ThorEnv):
         else:
             target_objects = self.objects
         for obj in target_objects:
-            obj_nid = self.id2nid(obj["objectId"])
+            obj_nid = obj["objectId"]
             if obj_nid is None:
                 continue
             node: Node = {
@@ -340,8 +340,8 @@ class CustomThorEnv(ThorEnv):
             nodes.append(node)
 
         for rel in relations:
-            from_id = self.id2nid(rel.left)
-            to_id = self.id2nid(rel.right)
+            from_id = rel.left
+            to_id = rel.right
             if from_id is None or to_id is None:
                 continue
             edges.append(
@@ -675,6 +675,7 @@ def validate_graph(graph: Graph) -> Graph:
                 "to_id": edge["to_id"],
             }
             for edge in edges
-            if edge["from_id"] in nodes and edge["to_id"] in nodes
+            if (edge["from_id"].find("|") == -1 or edge["from_id"] in nodes)
+            and (edge["to_id"].find("|") == -1 or edge["to_id"] in nodes)
         ],
     }

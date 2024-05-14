@@ -16,8 +16,7 @@ for the VirtualHome environment tasks
 import os
 import os.path as osp
 import sys
-from ast import Num
-from itertools import combinations, permutations
+from itertools import combinations
 
 from isort import file
 
@@ -239,7 +238,10 @@ def eval(
             len(relations_gt - relations_in)
             + len(obj_states_gt - obj_states_in)
         )
-        sr.append(1 - unsatif_conds[-1] / total_goal_conds[-1])
+        if total_goal_conds[-1] == 0:
+            sr.append(0)
+        else:
+            sr.append(1 - unsatif_conds[-1] / total_goal_conds[-1])
 
         unchanged_conds.append(
             (
@@ -255,14 +257,22 @@ def eval(
         results[" | ".join(d)] = {
             "PSR": sr[-1],
             "SR": sr[-1:].count(1.0),
-            "Precision": 1 - unchanged_conds[-1] / total_unchanged_conds[-1],
+            "Precision": (
+                1 - unchanged_conds[-1] / total_unchanged_conds[-1]
+                if total_unchanged_conds[-1] != 0
+                else 0
+            ),
             "Exec": exec_per_task[-1],
         }
 
     results["overall"] = {
         "PSR": sum(sr) / len(sr),
         "SR": sr.count(1.0) / len(sr),
-        "Precision": 1 - sum(unchanged_conds) / sum(total_unchanged_conds),
+        "Precision": (
+            1 - sum(unchanged_conds) / sum(total_unchanged_conds)
+            if sum(total_unchanged_conds) != 0
+            else 0
+        ),
         "Exec": sum(exec_per_task) / len(exec_per_task),
     }
     return results
@@ -283,31 +293,10 @@ def planner_executer(args: RunEvalArguments):
     test_tasks_per_task: List[List[str]] = []
     exec_per_task: List[float] = []
 
-    alfworld_tasks: dict[int, list[str]] = {}
-    for filename in os.listdir("graphs"):
-        filename = filename.split(".")[0]
-        room_num = int(filename.split("-")[-1])
-        if room_num not in alfworld_tasks:
-            alfworld_tasks[room_num] = []
-        alfworld_tasks[room_num].append(filename)
-
-    run_tasks = sum(
-        (
-            list(combinations(tasks, 3))
-            for _, tasks in alfworld_tasks.items()
-            if len(tasks) >= 3
-        ),
-        start=[],
-    )
-
-    for i in range(args.num_of_tasks):
+    task_i = 0
+    while task_i < args.num_of_tasks:
         task_picker = AlfWorldTaskPicker(args.data_root)
-        trajs = [
-            task_picker.pick(
-                *task.split("-")[:-1], room_num=int(task.split("-")[-1])
-            )
-            for task in run_tasks[i]
-        ]
+        trajs = task_picker.pick_random(3)
 
         final_graphs: list[Graph] = []
         for path, _ in trajs:
@@ -481,6 +470,8 @@ def planner_executer(args: RunEvalArguments):
         initial_states.append(initial_state)
         test_tasks_per_task.append(test_tasks)
         exec_per_task.append(sum(exec_ratio) / len(exec_ratio))
+
+        task_i += 1
 
     results = eval(
         final_states,
