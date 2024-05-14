@@ -163,3 +163,5 @@ virtualhome/*
 nohup.out
 error*.log
 .vscode/
+results/
+graphs
