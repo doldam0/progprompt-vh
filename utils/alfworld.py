@@ -121,6 +121,7 @@ class CustomThorEnv(ThorEnv):
         self.__nid2id: dict[str, str] = {}
         self.__id2nid: dict[str, str] = {}
         self.__id2obj: dict[str, AlfredObject] = {}
+        self.__initial_states: dict[str, tuple[float, float, float]] = {}
 
     @override
     def reset(
@@ -178,6 +179,11 @@ class CustomThorEnv(ThorEnv):
         self._args = Namespace()
         self._args.reward_config = reward_config_path
         self.set_task(trajectory_data, self._args, reward_type=reward_type)
+
+        self.__initial_states = {
+            obj["objectId"]: get_object_position(obj)
+            for obj in self.metadata["objects"]
+        }
 
     @override
     def step(self, action, smooth_nav=False):
@@ -387,12 +393,15 @@ class CustomThorEnv(ThorEnv):
         if toggle is None:
             toggle = not obj["isToggled"]
 
-        self.step(
-            {
-                "action": "ToggleObject" + ("On" if toggle else "Off"),
-                "objectId": obj["objectId"],
-            }
-        )
+        if obj["toggleable"]:
+            self.step(
+                {
+                    "action": "ToggleObject" + ("On" if toggle else "Off"),
+                    "objectId": obj["objectId"],
+                }
+            )
+        else:
+            self.init_object_position(obj)
 
     @overload
     def move_object(
@@ -489,6 +498,14 @@ class CustomThorEnv(ThorEnv):
                 "objectId": obj["objectId"],
             }
         )
+
+    def init_object_position(self, obj: AlfredObject | str) -> None:
+        if isinstance(obj, str):
+            if len(obj.split()) > 1:
+                obj = self.nid2id(obj)
+            obj = self.get_obj_from_id(obj)
+
+        self.move_object(obj, position=self.__initial_states[obj["objectId"]])
 
     def check_conditions(
         self,
