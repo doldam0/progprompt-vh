@@ -91,6 +91,9 @@ def main(args: TestArgument):
                     env.remove_object(" ".join(cmd_args[:2]))
                     print(f"Removed {cmd_args[1]}\n")
         else:
+            graph = env.environment_graph()
+            print(graph)
+
             env.render_script(cmd)
             if not args.debug:
                 print(env.agent.feedback)
